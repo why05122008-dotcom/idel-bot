@@ -2,7 +2,7 @@ import os
 print("🚀 Запуск Идела...")
 
 # Render env отладка
-token = os.getenv("TELEGRAMAPITOKEN")
+token = os.getenv("8464693849:AAEUNpZhA_DEk1X9IL70UxA8HWfKOS9xt3E")
 print(f"TOKEN: {'OK' if token else '❌ НЕ НАЙДЕН'}")
 print(f"OPENAI: {'OK' if os.getenv('OPENAI_API_KEY') else '❌ НЕ НАЙДЕН'}")
 

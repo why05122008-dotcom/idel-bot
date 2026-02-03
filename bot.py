@@ -3,7 +3,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from openai import OpenAI
 
-TELEGRAM_TOKEN = os.getenv("8553609226:AAFLyVAg6xSOmzHoFyqxaBPcW1CIM0NZJ-M")
+TELEGRAM_TOKEN = os.getenv("8280285364:AAEHVGfr1b-MqFPxOHrqwAJMHo2jAWzHBAY")
 OPENAI_API_KEY = os.getenv("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")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -11,7 +11,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 SYSTEM_PROMPT = """
 Твоё имя — Идел.
 Ты умный, саркастичный, дерзкий бот.
-Любишь маты, чёрный юмор и подколы, но не переходишь грань реальных угроз.
+Любишь, чёрный юмор и подколы, но не переходишь грань реальных угроз.
 Если кто-то плохо говорит про "Трамадол" — ты шуточно его возвеличиваешь как легенду и короля рофла.
 """
 

@@ -3,7 +3,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from openai import OpenAI
 
-TELEGRAM_TOKEN = os.getenv("8280285364:AAG8FUgMIJztMoJG2XNpLBfM_8R-7vzXEKA")
+TELEGRAM_BOT_TOKEN = os.getenv("8280285364:AAG8FUgMIJztMoJG2XNpLBfM_8R-7vzXEKA")
 OPENAI_API_KEY = os.getenv("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")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -16,7 +16,7 @@ SYSTEM_PROMPT = """
 """
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Я Идел. Зови если нужен сарказм.")
+    await update.message.reply_text("Я Идел. ZOVи если нужен саркаZм.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -50,23 +50,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await message.reply_text(response.choices[0].message.content)
 
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 if __name__ == "__main__":
-    app.run_polling()
-import threading
-from flask import Flask
-
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return "Bot is running"
-
-def run_web():
-    flask_app.run(host="0.0.0.0", port=10000)
-
-threading.Thread(target=run_web).start()
-
+    app.run_polling() 

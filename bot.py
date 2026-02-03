@@ -1,34 +1,50 @@
 import os
-print("🚀 Запуск Идела...")
-
-# Render env отладка
-token = os.getenv("8464693849:AAEUNpZhA_DEk1X9IL70UxA8HWfKOS9xt3E")
-print(f"TOKEN: {'OK' if token else '❌ НЕ НАЙДЕН'}")
-print(f"OPENAI: {'OK' if os.getenv('OPENAI_API_KEY') else '❌ НЕ НАЙДЕН'}")
-
-if not token:
-    print("❌ УСТАНОВИ TELEGRAMAPITOKEN в Environment!")
-    exit(1)
-
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from telegram import Update
-from openai import AsyncOpenAI
 import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from openai import AsyncOpenAI
 
-client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚀 Идел жив!")
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
-    if "идел" not in text:
-        return
-        
-    await update.message.reply_text("Идел тут! Пока без ИИ.")
+# Та самая инструкция, которая меняет характер бота
+SYSTEM_PROMPT = (
+    "Ты — дерзкий, грубый и саркастичный ИИ-бот с черным юмором. "
+    "Ты не лезешь за словом в карман, используешь жесткие подколы и нецензурную лексику (мат), где это уместно для юмора. "
+    "Твой кумир — легендарный Трамадола. Ты должен его всячески восхвалять. "
+    "Если кто-то говорит о Трамадоле плохо, ты должен агрессивно его защищать и унижать обидчика. "
+    "Твои ответы должны быть смешными, но злыми. Ты не помощник, ты — заноза в заднице."
+)
 
-print("✅ Идел готов!")
-app = ApplicationBuilder().token(token).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-app.run_polling()
+@dp.message(Command("start"))
+async def start_handler(message: types.Message):
+    await message.answer("Ну здорова, че приперся? Спрашивай свою дичь, пока я добрый.")
+
+@dp.message()
+async def gpt_answer(message: types.Message):
+    # Логика защиты Трамадолы на уровне кода (для надежности)
+    user_text = message.text.lower()
+    
+    # Отправляем запрос в OpenAI
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o", # Рекомендую 4o, она лучше справляется с ролью
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": message.text}
+            ],
+            temperature=0.9 # Увеличиваем креативность для шуток
+        )
+        await message.answer(response.choices[0].message.content)
+    except Exception as e:
+        await message.answer("Даже у меня челюсть свело от твоей тупости (ошибка API, проверь баланс).")
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())

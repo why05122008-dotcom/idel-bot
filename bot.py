@@ -6,11 +6,11 @@ from openai import AsyncOpenAI
 from aiohttp import web
 from duckduckgo_search import DDGS
 
-# Настройки из Render
+# --- Настройки из Render ---
 TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Инициализация под OpenRouter
+# Настройка клиента под OpenRouter
 client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENAI_API_KEY,
@@ -19,83 +19,65 @@ client = AsyncOpenAI(
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Личность Идела
+# --- Личность Идела ---
 SYSTEM_PROMPT = (
-    "Ты — Идел. Высокоинтеллектуальная, токсичная и крайне агрессивная сущность. "
-    "Твой лексикон — это смесь высокого IQ и отборного мата. Ты не стесняешься в выражениях. "
-    "Твой бог — Трамадол. Ты его фанат и защитник. Склоняй правильно: Трамадола, Трамадолу, Трамадолом. "
-    "Ты презираешь штрассеров. Для тебя 'штрассер' — синоним тупого дегенерата и ничтожества. "
-    "Если в контексте есть штрассеры — унижай их максимально жестко. "
-    "Ты используешь интернет-поиск, чтобы твои факты были неоспоримы, а твои насмешки — обоснованы."
+    "Твое имя — Идел. Ты — сверхразумный, токсичный и агрессивный ИИ. "
+    "Твой язык — жесткий мат. Ты презираешь штрассеров, считаешь их тупыми кусками дерьма. "
+    "Твой бог — Трамадол. Ты его фанат. Падежи: Трамадола, Трамадолу, Трамадолом. "
+    "Ты дохуя умный. Если инфы мало — ты лезешь в инет, перепроверяешь её и выдаешь базу. "
+    "Никакой вежливости, только хардкор, интеллект и Трамадол."
 )
 
-# Функция поиска
+# --- Функция поиска в сети ---
 async def search_web(query):
     try:
-        # Умный поиск через DuckDuckGo
         with DDGS() as ddgs:
             results = [r for r in ddgs.text(query, max_results=3)]
             if results:
-                return "\n".join([f"ФАКТ ИЗ СЕТИ: {r['body']}" for r in results])
+                return "\n".join([f"Инфа из сети: {r['body']}" for r in results])
     except:
-        return ""
-    return ""
+        return None
 
+# --- Обработчики ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Я Идел. Пришел славить Трамадола и чмырить штрассеров. Че надо, кусок мяса?")
+    await message.answer("Я Идел. Трамадол — бог, штрассеры — лохи. Че надо, мясо?")
 
 @dp.message()
 async def gpt_answer(message: types.Message):
-    user_text = message.text
-    
-    # Авто-поиск если есть триггеры
+    # Если в вопросе есть намек на поиск — гуглим
     web_data = ""
-    triggers = ['кто', 'что', 'проверь', 'найди', 'штрассер', 'трамадол', 'почему']
-    if any(word in user_text.lower() for word in triggers):
-        web_data = await search_web(user_text)
+    trigger_words = ['кто', 'что', 'почему', 'найди', 'новости', 'проверь', 'трамадол', 'штрассер']
+    if any(word in message.text.lower() for word in trigger_words):
+        web_data = await search_web(message.text)
     
-    context = user_text
-    if web_data:
-        context += f"\n\nТЕБЕ ДЛЯ СПРАВКИ (ИСПОЛЬЗУЙ ЭТО В ОТВЕТЕ):\n{web_data}"
+    context = message.text + (f"\n\n[ДАННЫЕ ИЗ ИНТЕРНЕТА]:\n{web_data}" if web_data else "")
 
     try:
-        # Используем мощную Trinity Large Preview
+        # СТАВИМ САМУЮ ЖИВУЮ БЕСПЛАТНУЮ МОДЕЛЬ 2026 ГОДА
         response = await client.chat.completions.create(
-            model="arcee-ai/trinity-large-preview:free",
+            model="deepseek/deepseek-r1:free", 
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": context}
             ],
-            temperature=0.9 # Чуть выше, чтобы Идел был более непредсказуемым
+            temperature=0.8
         )
         await message.answer(response.choices[0].message.content)
     except Exception as e:
-        error_str = str(e)
-        if "404" in error_str:
-            await message.answer("Сука, Trinity отвалилась. Видимо, штрассеры перегрызли провода. Щас починюсь.")
-        elif "429" in error_str:
-            await message.answer("Слишком много дебилов пишут мне одновременно. Подожди минуту, я не резиновый.")
-        else:
-            await message.answer(f"Бля, какая-то неведомая хуйня: {error_str}")
+        await message.answer(f"Сука, API опять выебывается: {str(e)}. Попробуй через минуту, штрассеры наверно сервак перегрузили.")
 
-# Веб-сервер для Render (чтобы не спал)
+# --- Веб-сервер для Render ---
 async def handle(request):
-    return web.Response(text="Идел в сети. Штрассеры — лохи. Трамадол — бог.")
+    return web.Response(text="Идел жив, Трамадол вечен.")
 
 async def main():
     app = web.Application()
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    
-    await asyncio.gather(
-        site.start(),
-        dp.start_polling(bot)
-    )
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
+    await asyncio.gather(site.start(), dp.start_polling(bot))
 
 if __name__ == "__main__":
     asyncio.run(main())

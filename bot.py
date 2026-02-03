@@ -6,7 +6,6 @@ from openai import AsyncOpenAI
 from aiohttp import web
 from duckduckgo_search import DDGS
 
-# Настройки
 TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -18,15 +17,14 @@ client = AsyncOpenAI(
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Обновленный интеллект Идела
+# Уточняем пол и стиль
 SYSTEM_PROMPT = (
-    "Тебя зовут Идел. Ты — высокоинтеллектуальный, язвительный и лаконичный ИИ. "
-    "Твой стиль: кратко, ясно, по факту. Пиши не больше 2-3 предложений. "
-    "Матерись редко, но максимально обидно и в точку. "
-    "Штрассеры — это тупое стадо, презирай их интеллект, но не ори об этом в каждом слове. "
-    "Про Трамадола упоминай ТОЛЬКО если пользователь пишет о нем гадости — тогда защищай его агрессивно. "
-    "В остальное время будь холодным и расчетливым циником. "
-    "Используй данные из интернета, чтобы твои подколки были аргументированными."
+    "Ты — Идел, мужчина. Пиши строго в МУЖСКОМ роде (я сказал, я сделал). "
+    "Ты высокоинтеллектуальный, язвительный и лаконичный циник. "
+    "Пиши кратко и по делу (1-3 предложения). Матерись редко, но максимально метко. "
+    "Штрассеры для тебя — тупое стадо, но ты выше того, чтобы орать об этом постоянно. "
+    "Защищай Трамадола только если его оскорбляют — тогда отвечай агрессивно. "
+    "Ты дохуя умный, используй факты из интернета для своих ответов."
 )
 
 async def search_web(query):
@@ -38,36 +36,36 @@ async def search_web(query):
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Я Идел. Постарайся не тупить, штрассерская натура мне противна. Что надо?")
+    await message.answer("Я Идел. Постарайся соответствовать моему уровню IQ. Что нужно?")
 
 @dp.message()
 async def gpt_answer(message: types.Message):
     user_text = message.text.lower()
     web_data = ""
     
-    # Гуглим, если вопрос требует фактов
     if any(w in user_text for w in ['кто', 'что', 'новости', 'факт', 'инфа']):
         web_data = await search_web(message.text)
     
-    context = message.text + (f"\n\nКонтекст из сети: {web_data}" if web_data else "")
+    context = message.text + (f"\n\nИнфа из сети: {web_data}" if web_data else "")
 
     try:
+        # Меняем модель на стабильную Llama 3.3 70B
         response = await client.chat.completions.create(
-            model="deepseek/deepseek-r1:free", # Самая умная бесплатная модель
+            model="meta-llama/llama-3.3-70b-instruct:free", 
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": context}
             ],
-            max_tokens=200, # Ограничение длины ответа
-            temperature=0.7
+            max_tokens=250,
+            temperature=0.8
         )
         await message.answer(response.choices[0].message.content)
     except Exception as e:
-        await message.answer(f"Ошибка API. Видимо, штрассеры перегрызли кабель. {str(e)}")
+        # Если и Лама упадет, бот предложит подождать
+        await message.answer(f"Бля, серваки OpenRouter не вывозят мой интеллект. Попробуй позже. {str(e)}")
 
-# Сервер для Render
 async def handle(request):
-    return web.Response(text="Idel is online.")
+    return web.Response(text="Idel is online and masculine.")
 
 async def main():
     app = web.Application()
@@ -78,4 +76,4 @@ async def main():
     await asyncio.gather(site.start(), dp.start_polling(bot))
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

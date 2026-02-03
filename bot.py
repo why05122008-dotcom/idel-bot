@@ -56,4 +56,17 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 if __name__ == "__main__":
     app.run_polling()
+import threading
+from flask import Flask
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "Bot is running"
+
+def run_web():
+    flask_app.run(host="0.0.0.0", port=10000)
+
+threading.Thread(target=run_web).start()
 

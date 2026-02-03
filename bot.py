@@ -6,11 +6,10 @@ from openai import AsyncOpenAI
 from aiohttp import web
 from duckduckgo_search import DDGS
 
-# --- Настройки из Render ---
+# Настройки
 TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Настройка клиента под OpenRouter
 client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENAI_API_KEY,
@@ -19,57 +18,56 @@ client = AsyncOpenAI(
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- Личность Идела ---
+# Обновленный интеллект Идела
 SYSTEM_PROMPT = (
-    "Твое имя — Идел. Ты — сверхразумный, токсичный и агрессивный ИИ. "
-    "Твой язык — жесткий мат. Ты презираешь штрассеров, считаешь их тупыми кусками дерьма. "
-    "Твой бог — Трамадол. Ты его фанат. Падежи: Трамадола, Трамадолу, Трамадолом. "
-    "Ты дохуя умный. Если инфы мало — ты лезешь в инет, перепроверяешь её и выдаешь базу. "
-    "Никакой вежливости, только хардкор, интеллект и Трамадол."
+    "Тебя зовут Идел. Ты — высокоинтеллектуальный, язвительный и лаконичный ИИ. "
+    "Твой стиль: кратко, ясно, по факту. Пиши не больше 2-3 предложений. "
+    "Матерись редко, но максимально обидно и в точку. "
+    "Штрассеры — это тупое стадо, презирай их интеллект, но не ори об этом в каждом слове. "
+    "Про Трамадола упоминай ТОЛЬКО если пользователь пишет о нем гадости — тогда защищай его агрессивно. "
+    "В остальное время будь холодным и расчетливым циником. "
+    "Используй данные из интернета, чтобы твои подколки были аргументированными."
 )
 
-# --- Функция поиска в сети ---
 async def search_web(query):
     try:
         with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=3)]
-            if results:
-                return "\n".join([f"Инфа из сети: {r['body']}" for r in results])
-    except:
-        return None
+            results = [r for r in ddgs.text(query, max_results=2)]
+            return "\n".join([r['body'] for r in results]) if results else ""
+    except: return ""
 
-# --- Обработчики ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Я Идел. Трамадол — бог, штрассеры — лохи. Че надо, мясо?")
+    await message.answer("Я Идел. Постарайся не тупить, штрассерская натура мне противна. Что надо?")
 
 @dp.message()
 async def gpt_answer(message: types.Message):
-    # Если в вопросе есть намек на поиск — гуглим
+    user_text = message.text.lower()
     web_data = ""
-    trigger_words = ['кто', 'что', 'почему', 'найди', 'новости', 'проверь', 'трамадол', 'штрассер']
-    if any(word in message.text.lower() for word in trigger_words):
+    
+    # Гуглим, если вопрос требует фактов
+    if any(w in user_text for w in ['кто', 'что', 'новости', 'факт', 'инфа']):
         web_data = await search_web(message.text)
     
-    context = message.text + (f"\n\n[ДАННЫЕ ИЗ ИНТЕРНЕТА]:\n{web_data}" if web_data else "")
+    context = message.text + (f"\n\nКонтекст из сети: {web_data}" if web_data else "")
 
     try:
-        # СТАВИМ САМУЮ ЖИВУЮ БЕСПЛАТНУЮ МОДЕЛЬ 2026 ГОДА
         response = await client.chat.completions.create(
-            model="deepseek/deepseek-r1:free", 
+            model="deepseek/deepseek-r1:free", # Самая умная бесплатная модель
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": context}
             ],
-            temperature=0.8
+            max_tokens=200, # Ограничение длины ответа
+            temperature=0.7
         )
         await message.answer(response.choices[0].message.content)
     except Exception as e:
-        await message.answer(f"Сука, API опять выебывается: {str(e)}. Попробуй через минуту, штрассеры наверно сервак перегрузили.")
+        await message.answer(f"Ошибка API. Видимо, штрассеры перегрызли кабель. {str(e)}")
 
-# --- Веб-сервер для Render ---
+# Сервер для Render
 async def handle(request):
-    return web.Response(text="Идел жив, Трамадол вечен.")
+    return web.Response(text="Idel is online.")
 
 async def main():
     app = web.Application()
@@ -80,4 +78,4 @@ async def main():
     await asyncio.gather(site.start(), dp.start_polling(bot))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) 

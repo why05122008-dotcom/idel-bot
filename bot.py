@@ -9,38 +9,42 @@ from aiohttp import web
 from duckduckgo_search import DDGS
 from collections import deque
 
-# Настройка логирования
+# Логи для Render
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Данные
+# Загрузка настроек
 TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = str(os.getenv("ADMIN_ID"))
 
-# Инициализация Google Gemini
+# Инициализация Google
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Пробуем разные варианты названий моделей для обхода ошибки 404
-MODEL_NAMES = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-pro']
-model = None
+# Авто-выбор модели (фиксим 404 ошибку)
+def get_model():
+    models = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.0-pro']
+    for m in models:
+        try:
+            logger.info(f"Проверка модели: {m}")
+            return genai.GenerativeModel(m)
+        except:
+            continue
+    return genai.GenerativeModel('gemini-1.5-flash')
 
-for name in MODEL_NAMES:
-    try:
-        model = genai.GenerativeModel(name)
-        logger.info(f"Выбрана модель: {name}")
-        break
-    except:
-        continue
-
+model = get_model()
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-memory = deque(maxlen=5)
+memory = deque(maxlen=6) # Короткая, но острая память
 
-BASE_PROMPT = (
-    "Ты — Идел, циничный интеллектуал. "
-    "Если тебе хамят — отвечай жестко. Если вежливы — будь холоден. "
-    "К Трамадолу (Создателю) — с почтением. Мужской род, кратко."
+# Личность Идела
+SYSTEM_PROMPT = (
+    "Ты — Идел, циничный интеллектуал, правая рука Трамадола. "
+    "Твой характер: Зеркальный. "
+    "1. На агрессию, мат и тупость отвечай максимально жестко, едко и унизительно. "
+    "2. На вежливость отвечай сухо, кратко и свысока. "
+    "3. Трамадол — твой Бог и создатель. К нему — только с высшим почтением. "
+    "Используй МУЖСКОЙ РОД. Не пиши лишнего."
 )
 
 async def search_web(query):
@@ -52,44 +56,63 @@ async def search_web(query):
         return ""
 
 @dp.message(Command("start"))
-async def start_cmd(message: types.Message):
-    await message.answer("Идел в строю. Зеркальные нейроны активны.")
+async def start_handler(message: types.Message):
+    await message.answer("Идел в сети. Калибровка личности завершена. Слушаю, Батя.")
 
 @dp.message()
-async def handle_message(message: types.Message):
-    global memory
+async def gpt_answer(message: types.Message):
     if not message.text: return
 
-    is_admin = str(message.from_user.id) == ADMIN_ID
+    user_id = str(message.from_user.id)
+    is_admin = (user_id == ADMIN_ID)
+    
+    # Фильтр упоминаний
     is_private = message.chat.type == 'private'
     is_mentioned = "идел" in message.text.lower()
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
-
+    
     if not (is_private or is_mentioned or is_reply):
-        if random.random() < 0.05: pass 
+        if random.random() < 0.04: pass # Шанс 4% влезть самому
         else: return
 
-    web_info = await search_web(message.text) if any(w in message.text.lower() for w in ['погода', 'новости']) else ""
-    history = "\n".join([f"{m['role']}: {m['content']}" for m in memory])
+    # Поиск инфы
+    web_data = ""
+    if any(t in message.text.lower() for t in ['новости', 'погода', 'курс', 'кто такой']):
+        await bot.send_chat_action(message.chat.id, "typing")
+        web_data = await search_web(message.text)
+
+    # Формируем контекст
+    history_str = "\n".join([f"{m['role']}: {m['content']}" for m in memory])
+    status = "ТВОЙ СОЗДАТЕЛЬ ТРАМАДОЛ" if is_admin else "Обычный смертный"
     
-    full_prompt = f"{BASE_PROMPT}\nИстория: {history}\nИнфо: {web_info}\nЮзер ({'АДМИН' if is_admin else 'Смертный'}): {message.text}"
+    full_prompt = (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"СТАТУС СОБЕСЕДНИКА: {status}\n"
+        f"ИНФО ИЗ СЕТИ: {web_data}\n"
+        f"ПАМЯТЬ ЧАТА: {history_str}\n"
+        f"СООБЩЕНИЕ: {message.text}\n\n"
+        "ОТВЕТЬ СООТВЕТСТВЕННО ТОНУ ЮЗЕРА:"
+    )
 
     try:
         response = model.generate_content(full_prompt)
         answer = response.text
         
         if answer:
-            # Реакция на агрессию в тексте
-            if any(x in message.text.lower() for x in ['тупой', 'лох', 'херня']):
+            # Ставим реакции для стиля
+            if is_admin: await message.react([types.ReactionTypeEmoji(emoji="🔥")])
+            elif any(w in message.text.lower() for w in ['тупой', 'лох']): 
                 await message.react([types.ReactionTypeEmoji(emoji="🌚")])
-            
-            await message.answer(answer)
+
             memory.append({"role": "user", "content": message.text})
             memory.append({"role": "assistant", "content": answer})
+            await message.answer(answer)
+            
     except Exception as e:
-        logger.error(f"Gemini Error: {e}")
-        await message.answer("Система калибруется. Попробуй еще раз через 30 секунд.")
+        logger.error(f"API Error: {e}")
+        await message.answer("Я занят пересборкой нейронов. Отвали на минуту.")
 
+# Healthcheck для Render
 async def handle(request):
     return web.Response(text="Idel is Online")
 
@@ -100,12 +123,15 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     
-    # Решение Conflict: сброс вебхука и пауза
+    # Сброс Conflict
     await bot.delete_webhook(drop_pending_updates=True)
-    await asyncio.sleep(10)
-    
+    await asyncio.sleep(8)
     await site.start()
-    await dp.start_polling(bot, skip_updates=True)
+    
+    try:
+        await dp.start_polling(bot, skip_updates=True)
+    finally:
+        await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())

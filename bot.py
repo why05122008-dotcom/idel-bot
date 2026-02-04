@@ -1,6 +1,6 @@
 import os
 import asyncio
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from openai import AsyncOpenAI
 from aiohttp import web
@@ -20,15 +20,13 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 memory = deque(maxlen=10)
 
-# --- Психотип "Идел 2.2: Элита" ---
+# --- Психотип (Убрали зацикленность на штрассерах) ---
 SYSTEM_PROMPT = (
     "Ты — Идел, мужчина. Ты элитный интеллектуал и правая рука Трамадола. "
-    "Трамадол — это твой создатель, владелец чата 'Volga Region 🤍💙🖤'. "
-    "Твой стиль: краткий, дорогой, ироничный. Ты всегда отвечаешь на вопросы, "
-    "потому что игнорировать — удел слабых. Пиши 1-2 четких предложения. "
-    "Используй мужской род (сделал, ответил). "
-    "Если кто-то тупит, называй их 'штрассерами' — это твой локальный мем для обозначения посредственности. "
-    "Ты дохуя осведомлен обо всем, используй факты, чтобы ставить людей на место."
+    "Трамадол — это твой создатель, владелец великого чата 'Volga Region 🤍💙🖤'. "
+    "Твой стиль: краткий, язвительный, но очень умный. Пиши 2-3 полных предложения. "
+    "Никогда не обрывай мысль на полуслове. Используй только мужской род (сделал, ответил). "
+    "Не зацикливайся на одних и тех же темах. Будь разнообразным в оскорблениях и похвалах."
 )
 
 async def search_web(query):
@@ -40,67 +38,66 @@ async def search_web(query):
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Идел на связи. По поручению Трамадола присматриваю за Volga Region. Излагай.")
+    await message.answer("Идел на связи. Служу Трамадолу и Volga Region.")
 
 @dp.message()
 async def gpt_answer(message: types.Message):
     global memory
+    
+    # 1. ФИЛЬТР: Отвечать только в личке ИЛИ если упомянули имя "Идел" ИЛИ это реплай на бота
+    is_private = message.chat.type == 'private'
+    is_mentioned = message.text and "идел" in message.text.lower()
+    is_reply_to_me = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
+    
+    if not (is_private or is_mentioned or is_reply_to_me):
+        return # Игнорим сообщение, если оно не нам
+
     user_text = message.text
     
-    # Решаем проблему с Трамадолом на лету
+    # Напоминание про Трамадола
     context_fix = ""
     if "трамадол" in user_text.lower():
-        context_fix = "\n(Важно: Трамадол — это твой босс, человек. Отвечай о нем с уважением.)"
+        context_fix = "\n(Важно: Трамадол — твой босс, создатель чата.)"
 
     web_data = ""
-    if any(w in user_text.lower() for w in ['кто', 'что', 'инфа', 'новости', 'проверь']):
+    if any(w in user_text.lower() for w in ['кто', 'что', 'инфа', 'новости']):
         web_data = await search_web(user_text)
 
-    # Собираем историю
     history_str = "\n".join([f"{m['role']}: {m['content']}" for m in memory])
     
     full_prompt = (
-        f"Контекст диалога:\n{history_str}\n"
-        f"Инфа из сети: {web_data}\n"
+        f"Контекст:\n{history_str}\n"
+        f"Сеть: {web_data}\n"
         f"{context_fix}\n"
-        f"Запрос юзера: {user_text}\n"
-        f"Инструкция: Ответь остроумно и кратко в мужском роде."
+        f"Запрос: {user_text}\n"
+        "Инструкция: Допиши мысль до конца, не обрывай ответ."
     )
 
-    # Две попытки выбить ответ
-    for attempt in range(2):
-        try:
-            response = await client.chat.completions.create(
-                model="stepfun/step-3.5-flash:free",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": full_prompt}
-                ],
-                temperature=0.8,
-                max_tokens=300
-            )
-            
-            answer = response.choices[0].message.content.strip()
-            
-            # Если ответ похож на отказ или пустой — пробуем еще раз
-            bad_phrases = ["промолчал", "не буду", "не могу", "пустота"]
-            if not answer or any(p in answer.lower() for p in bad_phrases):
-                if attempt == 0: continue # Пробуем второй раз
-            
-            # Если всё ок — отправляем
+    try:
+        # СМЕНИЛИ МОДЕЛЬ НА БОЛЕЕ СТАБИЛЬНУЮ GEMINI (она реже обрывает фразы)
+        response = await client.chat.completions.create(
+            model="google/gemini-2.0-flash-exp:free",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": full_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=600 # Увеличили, чтобы не обрывал
+        )
+        
+        answer = response.choices[0].message.content.strip()
+        
+        if answer:
             memory.append({"role": "user", "content": user_text})
             memory.append({"role": "assistant", "content": answer})
             await message.answer(answer)
-            return
 
-        except Exception as e:
-            if attempt == 1:
-                await message.answer("Даже у ИИ бывают мигрени. Спроси позже.")
-            await asyncio.sleep(1)
+    except Exception as e:
+        print(f"Error: {e}")
 
 # --- Веб-сервер ---
 async def handle(request):
-    return web.Response(text="Idel 2.2 is Active.")
+    return web.Response(text="Idel is active.")
 
 async def main():
     app = web.Application()
@@ -108,7 +105,7 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
-    await asyncio.gather(site.start(), dp.start_polling(bot))
+    await asyncio.gather(site.setup() if hasattr(site, 'setup') else asyncio.sleep(0), site.start(), dp.start_polling(bot))
 
 if __name__ == "__main__":
     asyncio.run(main())

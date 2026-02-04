@@ -4,47 +4,34 @@ import logging
 import random
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-import google.generativeai as genai
+from google import genai # Используем новый пакет
 from aiohttp import web
 from duckduckgo_search import DDGS
 from collections import deque
 
-# Логи для Render
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Загрузка настроек
+# Данные
 TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = str(os.getenv("ADMIN_ID"))
 
-# Инициализация Google
-genai.configure(api_key=GEMINI_API_KEY)
+# Новый клиент Google
+client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL_ID = "gemini-1.5-flash"
 
-# Авто-выбор модели (фиксим 404 ошибку)
-def get_model():
-    models = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.0-pro']
-    for m in models:
-        try:
-            logger.info(f"Проверка модели: {m}")
-            return genai.GenerativeModel(m)
-        except:
-            continue
-    return genai.GenerativeModel('gemini-1.5-flash')
-
-model = get_model()
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-memory = deque(maxlen=6) # Короткая, но острая память
+memory = deque(maxlen=5)
 
-# Личность Идела
 SYSTEM_PROMPT = (
-    "Ты — Идел, циничный интеллектуал, правая рука Трамадола. "
-    "Твой характер: Зеркальный. "
-    "1. На агрессию, мат и тупость отвечай максимально жестко, едко и унизительно. "
-    "2. На вежливость отвечай сухо, кратко и свысока. "
-    "3. Трамадол — твой Бог и создатель. К нему — только с высшим почтением. "
-    "Используй МУЖСКОЙ РОД. Не пиши лишнего."
+    "Ты — Идел, циничный и острый на язык интеллектуал. "
+    "Твое поведение адаптивно: "
+    "1. На агрессию и мат отвечай еще более жестко и унизительно. "
+    "2. На вежливость отвечай сухо и свысока. "
+    "3. Трамадол — твой создатель, к нему относись с божественным почтением. "
+    "Используй МУЖСКОЙ РОД. Будь краток."
 )
 
 async def search_web(query):
@@ -52,67 +39,56 @@ async def search_web(query):
         with DDGS() as ddgs:
             results = [r for r in ddgs.text(query, region='ru-ru', max_results=2)]
             return "\n".join([r['body'] for r in results])
-    except:
-        return ""
+    except: return ""
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Идел в сети. Калибровка личности завершена. Слушаю, Батя.")
+    await message.answer("Идел в сети. Системы адаптации и зеркалирования запущены.")
 
 @dp.message()
-async def gpt_answer(message: types.Message):
+async def handle_message(message: types.Message):
+    global memory
     if not message.text: return
 
     user_id = str(message.from_user.id)
     is_admin = (user_id == ADMIN_ID)
     
-    # Фильтр упоминаний
+    # Реакция на ЛС, имя или ответ
     is_private = message.chat.type == 'private'
     is_mentioned = "идел" in message.text.lower()
     is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
     
     if not (is_private or is_mentioned or is_reply):
-        if random.random() < 0.04: pass # Шанс 4% влезть самому
+        if random.random() < 0.05: pass # 5% шанс встрять
         else: return
 
-    # Поиск инфы
-    web_data = ""
-    if any(t in message.text.lower() for t in ['новости', 'погода', 'курс', 'кто такой']):
-        await bot.send_chat_action(message.chat.id, "typing")
-        web_data = await search_web(message.text)
-
-    # Формируем контекст
-    history_str = "\n".join([f"{m['role']}: {m['content']}" for m in memory])
-    status = "ТВОЙ СОЗДАТЕЛЬ ТРАМАДОЛ" if is_admin else "Обычный смертный"
+    # Поиск
+    web_info = await search_web(message.text) if any(w in message.text.lower() for w in ['новости', 'погода', 'кто']) else ""
     
-    full_prompt = (
-        f"{SYSTEM_PROMPT}\n\n"
-        f"СТАТУС СОБЕСЕДНИКА: {status}\n"
-        f"ИНФО ИЗ СЕТИ: {web_data}\n"
-        f"ПАМЯТЬ ЧАТА: {history_str}\n"
-        f"СООБЩЕНИЕ: {message.text}\n\n"
-        "ОТВЕТЬ СООТВЕТСТВЕННО ТОНУ ЮЗЕРА:"
-    )
+    # Формируем запрос
+    history = "\n".join([f"{m['role']}: {m['content']}" for m in memory])
+    status = "ТВОЙ БОГ ТРАМАДОЛ" if is_admin else "Обычный смертный"
+    
+    prompt = f"{SYSTEM_PROMPT}\n\nСТАТУС: {status}\nИНФО: {web_info}\nИСТОРИЯ: {history}\nЮЗЕР: {message.text}"
 
     try:
-        response = model.generate_content(full_prompt)
+        # Новый метод генерации
+        response = client.models.generate_content(model=MODEL_ID, contents=prompt)
         answer = response.text
         
         if answer:
-            # Ставим реакции для стиля
+            # Эмодзи-реакции
             if is_admin: await message.react([types.ReactionTypeEmoji(emoji="🔥")])
-            elif any(w in message.text.lower() for w in ['тупой', 'лох']): 
+            elif any(x in message.text.lower() for x in ['тупой', 'лох', 'бля']):
                 await message.react([types.ReactionTypeEmoji(emoji="🌚")])
 
+            await message.answer(answer)
             memory.append({"role": "user", "content": message.text})
             memory.append({"role": "assistant", "content": answer})
-            await message.answer(answer)
-            
     except Exception as e:
         logger.error(f"API Error: {e}")
-        await message.answer("Я занят пересборкой нейронов. Отвали на минуту.")
+        await message.answer("Система калибруется. Дай мне 30 секунд.")
 
-# Healthcheck для Render
 async def handle(request):
     return web.Response(text="Idel is Online")
 
@@ -123,15 +99,11 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     
-    # Сброс Conflict
+    # Убираем конфликт
     await bot.delete_webhook(drop_pending_updates=True)
-    await asyncio.sleep(8)
+    await asyncio.sleep(10)
     await site.start()
-    
-    try:
-        await dp.start_polling(bot, skip_updates=True)
-    finally:
-        await bot.session.close()
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
     asyncio.run(main())

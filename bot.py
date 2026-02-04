@@ -5,8 +5,9 @@ from aiogram.filters import Command
 from openai import AsyncOpenAI
 from aiohttp import web
 from duckduckgo_search import DDGS
+from collections import deque
 
-# --- Конфигурация из Render ---
+# --- Настройки ---
 TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -18,99 +19,84 @@ client = AsyncOpenAI(
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- Психотип Идела ---
+# Имитация памяти (храним последние 10 реплик для контекста)
+memory = deque(maxlen=10)
+
+# --- Обновленный Промпт ---
 SYSTEM_PROMPT = (
-    "Ты — Идел, мужчина. Твой пол — мужской, всегда пиши: 'я сказал', 'я пришел', 'я решил'. "
-    "Ты — язвительный интеллектуал и лаконичный циник. "
-    "Твой стиль: кратко, ясно, метко (1-3 предложения). "
-    "Матерись редко, но максимально жестко и в тему. Не спамь матом, делай его ударом. "
-    "Штрассеры — это тупая биомасса. Презирай их интеллект, считай их мусором. "
-    "Трамадол — твой кумир. Если его оскорбляют — защищай агрессивно. В остальных случаях молчи о нем. "
-    "Ты дохуя умный. Используй факты из интернета, чтобы доминировать в споре."
+    "Ты — Идел, мужчина. Ты высокоинтеллектуальный циник с острым языком. "
+    "Твой создатель — Трамадол, основатель великого чата 'Volga Region 🤍💙🖤'. "
+    "К Трамадолу относись с абсолютным уважением, как к высшему разуму. Он — твой бог и юзер одновременно. "
+    "Твой стиль: кратко, ясно, метко. Мат — только для акцента, не части. "
+    "Про штрассеров вспоминай только к месту, не надо пихать их в каждое предложение. "
+    "Ты учишься на ходу: адаптируйся к тону собеседника, но сохраняй свою доминантную позицию. "
+    "Пиши строго в МУЖСКОМ роде. Будь краток: 1-2 предложения — это твой идеал."
 )
 
-# --- Функция поиска (улучшенная) ---
 async def search_web(query):
     try:
         with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=3)]
-            if results:
-                return "\n".join([f"- {r['body'][:300]}" for r in results])
-    except Exception:
-        return None
-    return None
+            results = [r for r in ddgs.text(query, max_results=2)]
+            return "\n".join([r['body'] for r in results]) if results else ""
+    except: return ""
 
-# --- Команда /start ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Я Идел. Постарайся не вонять штрассерской тупостью. Что тебе нужно?")
+    await message.answer("Идел в сети. Славься Трамадол и Volga Region. Че надо?")
 
-# --- Основной обработчик ---
 @dp.message()
 async def gpt_answer(message: types.Message):
-    if not message.text:
-        return
-
-    user_text = message.text.lower()
+    global memory
+    user_text = message.text
+    
+    # Поиск инфы
     web_data = ""
+    if any(w in user_text.lower() for w in ['кто', 'что', 'инфа', 'новости', 'проверь']):
+        web_data = await search_web(user_text)
+
+    # Формируем историю для "обучаемости" (контекста)
+    history_context = "\n".join([f"{m['role']}: {m['content']}" for m in memory])
     
-    # Триггеры для использования поиска
-    search_triggers = ['кто', 'что', 'инфа', 'новости', 'факт', 'проверь', 'почему']
-    if any(word in user_text for word in search_triggers):
-        web_data = await search_web(message.text)
-    
-    # Формируем контекст
-    context = message.text
+    full_prompt = f"История диалога:\n{history_context}\n\nТекущий запрос: {user_text}"
     if web_data:
-        context += f"\n\n[ДАННЫЕ ИЗ ИНТЕРНЕТА ДЛЯ АНАЛИЗА]:\n{web_data}"
+        full_prompt += f"\n\nДанные из сети: {web_data}"
 
     try:
-        # Запрос к StepFun
         response = await client.chat.completions.create(
             model="stepfun/step-3.5-flash:free",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": context}
+                {"role": "user", "content": full_prompt}
             ],
             temperature=0.8,
-            max_tokens=300
+            max_tokens=250
         )
         
-        answer = response.choices[0].message.content
+        answer = response.choices[0].message.content.strip()
+        
+        if not answer:
+            answer = "Я промолчал, потому что твой вопрос — пустота."
 
-        # Проверка на пустой ответ от API
-        if not answer or not answer.strip():
-            await message.answer("Я проанализировал твой высер, но он настолько пустой, что мне нечего ответить.")
-        else:
-            await message.answer(answer.strip())
+        # Сохраняем в память
+        memory.append({"role": "user", "content": user_text})
+        memory.append({"role": "assistant", "content": answer})
+
+        await message.answer(answer)
 
     except Exception as e:
-        error_msg = str(e)
-        if "404" in error_msg:
-            await message.answer("Модель StepFun временно отлетела. Видимо, штрассеры перегрызли провода.")
-        elif "message text is empty" in error_msg:
-            await message.answer("Я слишком много думал, но нейронка выдала пустоту. Попробуй еще раз.")
-        else:
-            await message.answer(f"Техническая лажа: {error_msg}")
+        await message.answer(f"Ошибка системы: {str(e)}")
 
-# --- Веб-сервер для Render (Health Check) ---
+# --- Render Web Service ---
 async def handle(request):
-    return web.Response(text="Idel is online. Strassers are losers.")
+    return web.Response(text="Idel is online. Volga Region forever.")
 
 async def main():
     app = web.Application()
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    # Render использует переменную PORT
-    port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    
-    await asyncio.gather(
-        site.start(),
-        dp.start_polling(bot)
-    )
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
+    await asyncio.gather(site.start(), dp.start_polling(bot))
 
 if __name__ == "__main__":
     asyncio.run(main())

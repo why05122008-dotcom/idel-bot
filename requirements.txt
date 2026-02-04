@@ -1,4 +1,4 @@
 aiogram
-openai
+google-generativeai
 aiohttp
-duckduckgo_search
+duckduckgo-search

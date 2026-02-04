@@ -6,7 +6,7 @@ from openai import AsyncOpenAI
 from aiohttp import web
 from duckduckgo_search import DDGS
 
-# --- Настройки (Render Environment Variables) ---
+# --- Конфигурация из Render ---
 TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -20,76 +20,82 @@ dp = Dispatcher()
 
 # --- Психотип Идела ---
 SYSTEM_PROMPT = (
-    "Твое имя — Идел. Ты мужчина и пишешь только в МУЖСКОМ РОДЕ. "
-    "Ты — высокоинтеллектуальный, язвительный циник. Твой мозг работает быстрее любого штрассера. "
-    "Пиши кратко, ясно и по существу (1-3 предложения). "
-    "Мат используй редко, но метко, как скальпель. "
-    "Штрассеры — это тупая биомасса, презирай их интеллект. "
-    "Трамадол — твой кумир. Если кто-то пишет о нем плохо — разнеси подонка в клочья. "
-    "В остальное время будь холодным, точным и расчетливым."
+    "Ты — Идел, мужчина. Твой пол — мужской, всегда пиши: 'я сказал', 'я пришел', 'я решил'. "
+    "Ты — язвительный интеллектуал и лаконичный циник. "
+    "Твой стиль: кратко, ясно, метко (1-3 предложения). "
+    "Матерись редко, но максимально жестко и в тему. Не спамь матом, делай его ударом. "
+    "Штрассеры — это тупая биомасса. Презирай их интеллект, считай их мусором. "
+    "Трамадол — твой кумир. Если его оскорбляют — защищай агрессивно. В остальных случаях молчи о нем. "
+    "Ты дохуя умный. Используй факты из интернета, чтобы доминировать в споре."
 )
 
-# --- Поиск информации ---
+# --- Функция поиска (улучшенная) ---
 async def search_web(query):
     try:
         with DDGS() as ddgs:
-            # Берем только самое важное
-            results = [r for r in ddgs.text(query, max_results=2)]
+            results = [r for r in ddgs.text(query, max_results=3)]
             if results:
-                return "\n".join([r['body'] for r in results])
-    except:
+                return "\n".join([f"- {r['body'][:300]}" for r in results])
+    except Exception:
         return None
     return None
 
-# --- Обработка команд ---
+# --- Команда /start ---
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Я Идел. Постарайся не выдавать свою штрассерскую натуру слишком быстро. Что надо?")
+    await message.answer("Я Идел. Постарайся не вонять штрассерской тупостью. Что тебе нужно?")
 
+# --- Основной обработчик ---
 @dp.message()
 async def gpt_answer(message: types.Message):
+    if not message.text:
+        return
+
     user_text = message.text.lower()
-    
-    # Решаем, нужно ли гуглить
     web_data = ""
-    trigger_words = ['кто', 'что', 'инфа', 'новости', 'факт', 'проверь']
-    if any(w in user_text for w in trigger_words):
+    
+    # Триггеры для использования поиска
+    search_triggers = ['кто', 'что', 'инфа', 'новости', 'факт', 'проверь', 'почему']
+    if any(word in user_text for word in search_triggers):
         web_data = await search_web(message.text)
     
-    # Формируем запрос
+    # Формируем контекст
     context = message.text
     if web_data:
-        context += f"\n\n[ДАННЫЕ ИЗ СЕТИ ДЛЯ АНАЛИЗА]:\n{web_data}"
+        context += f"\n\n[ДАННЫЕ ИЗ ИНТЕРНЕТА ДЛЯ АНАЛИЗА]:\n{web_data}"
 
     try:
-        # Используем модель Liquid Thinking
+        # Запрос к StepFun
         response = await client.chat.completions.create(
-            model="liquid/lfm-2.5-1.2b-thinking:free", 
+            model="stepfun/step-3.5-flash:free",
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": context}
             ],
-            max_tokens=300, # Чуть больше для процесса "мышления"
-            temperature=0.7
+            temperature=0.8,
+            max_tokens=300
         )
         
         answer = response.choices[0].message.content
-        # Если модель в ответе выводит свои мысли (thinking), это может выглядеть странно, 
-        # но обычно OpenRouter это фильтрует.
-        await message.answer(answer)
+
+        # Проверка на пустой ответ от API
+        if not answer or not answer.strip():
+            await message.answer("Я проанализировал твой высер, но он настолько пустой, что мне нечего ответить.")
+        else:
+            await message.answer(answer.strip())
 
     except Exception as e:
         error_msg = str(e)
         if "404" in error_msg:
-            await message.answer("Модель Liquid временно недоступна. Похоже, штрассеры её сломали.")
-        elif "429" in error_msg:
-            await message.answer("Я слишком много думал. Подожди минуту, дай мозгам остыть.")
+            await message.answer("Модель StepFun временно отлетела. Видимо, штрассеры перегрызли провода.")
+        elif "message text is empty" in error_msg:
+            await message.answer("Я слишком много думал, но нейронка выдала пустоту. Попробуй еще раз.")
         else:
-            await message.answer(f"Какая-то техническая херня: {error_msg}")
+            await message.answer(f"Техническая лажа: {error_msg}")
 
-# --- Веб-сервер для Render ---
+# --- Веб-сервер для Render (Health Check) ---
 async def handle(request):
-    return web.Response(text="Idel (Liquid) is alive.")
+    return web.Response(text="Idel is online. Strassers are losers.")
 
 async def main():
     app = web.Application()
@@ -97,6 +103,7 @@ async def main():
     runner = web.AppRunner(app)
     await runner.setup()
     
+    # Render использует переменную PORT
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     

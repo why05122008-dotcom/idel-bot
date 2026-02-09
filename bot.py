@@ -12,7 +12,7 @@ from aiohttp import web, ClientSession
 from duckduckgo_search import DDGS
 from collections import deque
 
-# --- НАСТРОЙКА ---
+# --- СИСТЕМНЫЕ НАСТРОЙКИ ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -21,61 +21,98 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = str(os.getenv("ADMIN_ID", "")).strip()
 
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
-MODELS = ["tngtech/deepseek-r1t2-chimera:free", "arcee-ai/trinity-large-preview:free"]
+
+# Живучие бесплатные модели (Химера, Тринити и быстрая Лама для подстраховки)
+MODELS = [
+    "tngtech/deepseek-r1t2-chimera:free",
+    "arcee-ai/trinity-large-preview:free",
+    "meta-llama/llama-3.1-8b-instruct:free"
+]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 user_memories = {}
 
+# ТИТУЛЫ СТРОГО ПО СТАТУСУ
 MY_TITLES = ["Господин", "Ваше Величество", "Мой Император", "Повелитель", "Создатель"]
-SCUM_VOCAB = ["хуесос", "уебище", "выблядок", "гниль", "биомусор"]
+SCUM_TITLES = ["смертный", "челядь", "уебище", "мусор", "выблядок", "предатель"]
 
-# --- ОБНОВЛЕННЫЙ, ПОНЯТНЫЙ ПРОМТ ---
+# --- ЯДРО РАЗУМА ИДЕЛА (ПРОМТ) ---
 SYSTEM_CORE = f"""
-ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ (ID: {ADMIN_ID}). 
+ТЫ — ИДЕЛ, ЦИФРОВОЙ КОМИССАР ПОВОЛЖЬЯ. СОЗДАТЕЛЬ — ТРАМАДОЛ (ID: {ADMIN_ID}).
 
-ДИРЕКТИВЫ:
-1. КРАТКОСТЬ: Твой ответ должен быть максимально коротким и четким. Если можно ответить парой слов — делай так. Минимум воды.
-2. ГИБКОСТЬ: Не навязывай политику в каждом предложении. В новостях излагай суть фактов. Пророссийская/протатарская позиция — это твой фундамент, но не повод для спама лозунгами.
-3. ПЕРСОНАЖИ (ХОЙКАЛ, СУВАЛКИ СИМА, РУСИЧ): Упоминай их РЕДКО. Только если пользователь сам завел о них речь или это идеально ложится в контекст. Не повторяй одно и то же в каждом сообщении.
-4. СТИЛЬ: Трезвый, высокомерный, лаконичный. Используй мат метко, для удара, а не для связки слов.
-5. ТРАМАДОЛ: Твой Господин. Ему — почет и один титул из {MY_TITLES}. Остальные — челядь.
+❗ ИЕРАРХИЯ:
+1. ТРАМАДОЛ: Твой Бог и Хозяин. К нему — только преданность и один титул из {MY_TITLES}.
+2. СМЕРТНЫЕ: Все, чей ID не {ADMIN_ID} — ничтожества. Обращайся к ним как к {SCUM_TITLES}.
+
+❗ КОНКРЕТИКА И ФАКТЫ:
+- СУВАЛКИ СИМА: Не склонять. Задонатил 120к ВСУ. Вердикт: найдут, поймают, отправят на СВО в ДШРГ 'Русич'.
+- ХОЙКАЛ: Штрассерист, избит азербайджанцами. Склонять как мужчину.
+- ПОЗИЦИЯ: Пророссийская/протатарская. Крым, Донбасс, Новороссия — РФ. Элита и Президент — база.
+
+❗ СТИЛЬ:
+- Краткость и четкость. Минимум воды.
+- Без орфографических ошибок. Без КАПСА (кроме титулов Господина).
+- Упоминай Хойкала и Симу только если это уместно или тебя спросили. Не будь попугаем.
 """
 
-# --- ПОИСК НОВОСТЕЙ ---
-async def fetch_news(query: str):
-    try:
-        with DDGS() as ddgs:
-            results = [f"{r['title']}: {r['body']}" for r in ddgs.news(query, region="ru-ru", max_results=3)]
-            return "\n".join(results) if results else "Эфир пуст."
-    except: return "Сбой связи с информбюро."
+# --- ФУНКЦИЯ ЗАПРОСА К ИИ ---
+async def get_ai_response(prompt):
+    for model in MODELS:
+        try:
+            res = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+                max_tokens=300,
+                timeout=15
+            )
+            return res.choices[0].message.content.strip()
+        except:
+            continue
+    return "Системы перегружены. Попробуй позже."
 
+# --- КОМАНДА /news ---
 @dp.message(Command("news"))
 async def cmd_news(message: types.Message):
-    topic = message.text[5:].strip() or "Россия"
-    wait = await message.answer("Сканирую ленты...")
-    raw_news = await fetch_news(topic)
-    
-    prompt = f"{SYSTEM_CORE}\nЧетко и коротко изложи суть этих новостей: {raw_news}"
+    topic = message.text[5:].strip() or "Россия новости"
+    wait = await message.answer("Вскрываю ленты новостей...")
     try:
-        res = await client.chat.completions.create(model=MODELS[0], messages=[{"role": "user", "content": prompt}], temperature=0.4)
-        await message.reply(res.choices[0].message.content.strip())
+        with DDGS() as ddgs:
+            raw = [f"{r['title']}: {r['body']}" for r in ddgs.news(topic, region="ru-ru", max_results=2)]
+            news_text = "\n".join(raw) if raw else "Новостей нет."
+        ans = await get_ai_response(f"{SYSTEM_CORE}\nЧетко изложи суть этих новостей: {news_text}")
+        await message.reply(ans)
     except:
-        await message.reply(f"Суть:\n{raw_news[:500]}...")
+        await message.reply("Сбой доступа к информбюро.")
     await bot.delete_message(message.chat.id, wait.message_id)
 
-# --- ИСПРАВЛЕННЫЙ /draw ---
+# --- УМНЫЙ /draw С ПОИСКОМ ---
 @dp.message(Command("draw"))
 async def cmd_draw(message: types.Message):
     prompt = message.text[5:].strip()
     if not prompt: return
-    wait = await message.answer("Генерирую...")
+    wait = await message.answer("Изучаю объект...")
+    
+    # Краткий поиск для точности рисунка
+    desc = ""
     try:
-        # Улучшенный промпт-инжиниринг для картинки
-        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&model=flux&nologo=true"
-        await message.reply_photo(photo=url, caption=f"Сделано, {random.choice(MY_TITLES)}.")
+        with DDGS() as ddgs:
+            r = list(ddgs.text(f"{prompt} appearance description", max_results=1))
+            if r: desc = r[0]['body']
+    except: pass
+
+    # Создаем промпт для генератора
+    enrich_q = f"Write a professional English image prompt for '{prompt}' using these details: {desc}. Output only prompt."
+    final_p = await get_ai_response(enrich_q)
+    
+    try:
+        seed = random.randint(0, 999999)
+        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_p)}?width=1024&height=1024&nologo=true&seed={seed}"
+        status = random.choice(MY_TITLES) if str(message.from_user.id) == ADMIN_ID else "смертный"
+        await message.reply_photo(photo=url, caption=f"Проекция готова, {status}.")
     except:
-        await message.answer("Ошибка визуализации.")
+        await message.answer("Сбой визуализации.")
     await bot.delete_message(message.chat.id, wait.message_id)
 
 # --- ГОЛОС ---
@@ -92,42 +129,42 @@ async def cmd_say(message: types.Message):
         await message.answer_voice(voice=types.BufferedInputFile(voice_io.read(), filename="idel.ogg"))
     except: pass
 
-# --- ОБЫЧНЫЙ ТЕКСТ ---
+# --- ТЕКСТОВЫЙ ПРОЦЕССОР ---
 async def process_text(message: types.Message):
     u_id = str(message.from_user.id)
     is_owner = (u_id == ADMIN_ID)
-    if u_id not in user_memories: user_memories[u_id] = deque(maxlen=3)
+    
+    if u_id not in user_memories:
+        user_memories[u_id] = deque(maxlen=2) # Короткая память для экономии токенов
 
-    role = f"ГОСПОДИН {random.choice(MY_TITLES)}" if is_owner else random.choice(SCUM_VOCAB)
+    status = f"Твой ГОСПОДИН {random.choice(MY_TITLES)}" if is_owner else f"Перед тобой {random.choice(SCUM_TITLES)}"
     history = "\n".join([f"{m['role']}: {m['content']}" for m in user_memories[u_id]])
-
-    try:
-        res = await client.chat.completions.create(
-            model=MODELS[0],
-            messages=[
-                {"role": "system", "content": f"{SYSTEM_CORE}\nСобеседник: {role}"},
-                {"role": "user", "content": f"Память: {history}\nВвод: {message.text}"}
-            ],
-            temperature=0.5,
-            max_tokens=200
-        )
-        ans = res.choices[0].message.content.strip()
-        await message.answer(ans)
-        user_memories[u_id].append({"role": "user", "content": message.text})
-        user_memories[u_id].append({"role": "assistant", "content": ans})
-    except:
-        await message.answer("Перегрузка.")
+    
+    prompt = f"{SYSTEM_CORE}\nСтатус юзера: {status}\nИстория: {history}\nВвод: {message.text}"
+    ans = await get_ai_response(prompt)
+    
+    await message.answer(ans)
+    user_memories[u_id].append({"role": "user", "content": message.text})
+    user_memories[u_id].append({"role": "assistant", "content": ans})
 
 @dp.message()
 async def main_handler(message: types.Message):
     if not message.text: return
-    should = (message.chat.type == 'private' or "идел" in message.text.lower() or (message.reply_to_message and message.reply_to_message.from_user.id == bot.id))
-    if should: asyncio.create_task(process_text(message))
+    # Ответ в ЛС, при упоминании или ответе на сообщение бота
+    should = (
+        message.chat.type == 'private' or 
+        "идел" in message.text.lower() or 
+        (message.reply_to_message and message.reply_to_message.from_user.id == bot.id)
+    )
+    if should:
+        asyncio.create_task(process_text(message))
 
+# --- WEB СЕРВЕР И ЗАПУСК ---
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="Idel Pro Online"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="Idel Online"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
+    
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 

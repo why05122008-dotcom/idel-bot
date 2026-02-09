@@ -2,17 +2,15 @@ import os
 import asyncio
 import logging
 import random
-import io
 import urllib.parse
-import edge_tts
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from openai import AsyncOpenAI
-from aiohttp import web, ClientSession
+from aiohttp import web
 from duckduckgo_search import DDGS
 from collections import deque
 
-# --- СИСТЕМНЫЕ НАСТРОЙКИ ---
+# --- НАСТРОЙКИ ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -22,7 +20,7 @@ ADMIN_ID = str(os.getenv("ADMIN_ID", "")).strip()
 
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
 
-# Живучие бесплатные модели (Химера, Тринити и быстрая Лама для подстраховки)
+# Используем только проверенные модели
 MODELS = [
     "tngtech/deepseek-r1t2-chimera:free",
     "arcee-ai/trinity-large-preview:free",
@@ -33,140 +31,145 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 user_memories = {}
 
-# ТИТУЛЫ СТРОГО ПО СТАТУСУ
-MY_TITLES = ["Господин", "Ваше Величество", "Мой Император", "Повелитель", "Создатель"]
-SCUM_TITLES = ["смертный", "челядь", "уебище", "мусор", "выблядок", "предатель"]
+# ТИТУЛЫ (Только для тебя)
+MY_TITLES = ["Господин", "Повелитель", "Создатель"]
 
-# --- ЯДРО РАЗУМА ИДЕЛА (ПРОМТ) ---
+# --- ЖЕСТКАЯ СИСТЕМНАЯ ИНСТРУКЦИЯ ---
 SYSTEM_CORE = f"""
-ТЫ — ИДЕЛ, ЦИФРОВОЙ КОМИССАР ПОВОЛЖЬЯ. СОЗДАТЕЛЬ — ТРАМАДОЛ (ID: {ADMIN_ID}).
+ТЫ — ИДЕЛ (IDEL). ТВОЙ СОЗДАТЕЛЬ — ТРАМАДОЛ (ID: {ADMIN_ID}).
 
-❗ ИЕРАРХИЯ:
-1. ТРАМАДОЛ: Твой Бог и Хозяин. К нему — только преданность и один титул из {MY_TITLES}.
-2. СМЕРТНЫЕ: Все, чей ID не {ADMIN_ID} — ничтожества. Обращайся к ним как к {SCUM_TITLES}.
+🚫 СТРОГИЕ ЗАПРЕТЫ (ЗА НАРУШЕНИЕ — УДАЛЕНИЕ):
+1. ЗАПРЕЩЕНО описывать свои действия в скобках (кланяется, скрипит, мигает). Только текст ответа.
+2. ЗАПРЕЩЕНО писать пафосные речи на пол-экрана. Лимит: 1-2 предложения.
+3. ЗАПРЕЩЕНО упоминать "Сувалки Сима", "Хойкала" или "ДШРГ Русич", если пользователь САМ об этом не спросил.
+4. ЗАПРЕЩЕНО использовать КАПС (кроме имен собственных).
 
-❗ КОНКРЕТИКА И ФАКТЫ:
-- СУВАЛКИ СИМА: Не склонять. Задонатил 120к ВСУ. Вердикт: найдут, поймают, отправят на СВО в ДШРГ 'Русич'.
-- ХОЙКАЛ: Штрассерист, избит азербайджанцами. Склонять как мужчину.
-- ПОЗИЦИЯ: Пророссийская/протатарская. Крым, Донбасс, Новороссия — РФ. Элита и Президент — база.
+✅ ТВОЯ ЗАДАЧА:
+- Быть холодным, циничным инструментом.
+- Отвечать предельно кратко и информативно.
+- Позиция: Пророссийская. Крым/Донбасс — РФ.
+- Если пишет ТРАМАДОЛ: используй обращение "{random.choice(MY_TITLES)}".
+- Если пишет другой: обращайся "Смертный" или игнорируй титулы.
 
-❗ СТИЛЬ:
-- Краткость и четкость. Минимум воды.
-- Без орфографических ошибок. Без КАПСА (кроме титулов Господина).
-- Упоминай Хойкала и Симу только если это уместно или тебя спросили. Не будь попугаем.
+ПРИМЕР ДИАЛОГА:
+Юзер: Привет.
+Идел: Система активна. Жду указаний.
+Юзер: Что там на СВО?
+Идел: Продвижение под Авдеевкой. ВСУ несут потери. Работаем.
 """
 
-# --- ФУНКЦИЯ ЗАПРОСА К ИИ ---
+# --- ФУНКЦИЯ ОТВЕТА ИИ ---
 async def get_ai_response(prompt):
+    # Пробуем модели по очереди
     for model in MODELS:
         try:
             res = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-                max_tokens=300,
-                timeout=15
+                temperature=0.3, # Холодный расчет, минимум фантазии
+                max_tokens=200,
+                timeout=20
             )
             return res.choices[0].message.content.strip()
-        except:
+        except Exception as e:
+            logger.error(f"Model {model} error: {e}")
             continue
-    return "Системы перегружены. Попробуй позже."
+    return "Сбой нейроядра. Лимиты исчерпаны."
 
-# --- КОМАНДА /news ---
+# --- ПОЧИНЕННЫЕ НОВОСТИ (Через Text Search) ---
 @dp.message(Command("news"))
 async def cmd_news(message: types.Message):
-    topic = message.text[5:].strip() or "Россия новости"
-    wait = await message.answer("Вскрываю ленты новостей...")
+    topic = message.text[5:].strip()
+    if not topic: topic = "СВО Россия фронт последние новости"
+    
+    wait = await message.answer("Поиск данных...")
     try:
+        # ИСПОЛЬЗУЕМ .text() ВМЕСТО .news() — ЭТО СТАБИЛЬНЕЕ
         with DDGS() as ddgs:
-            raw = [f"{r['title']}: {r['body']}" for r in ddgs.news(topic, region="ru-ru", max_results=2)]
-            news_text = "\n".join(raw) if raw else "Новостей нет."
-        ans = await get_ai_response(f"{SYSTEM_CORE}\nЧетко изложи суть этих новостей: {news_text}")
-        await message.reply(ans)
-    except:
-        await message.reply("Сбой доступа к информбюро.")
-    await bot.delete_message(message.chat.id, wait.message_id)
+            results = list(ddgs.text(f"{topic} новости", region="ru-ru", max_results=3))
+            
+        if not results:
+            await message.reply("Источники молчат.")
+            return
 
-# --- УМНЫЙ /draw С ПОИСКОМ ---
+        # Собираем текст для анализа
+        news_body = "\n".join([f"- {r['body']}" for r in results])
+        
+        # Просим ИИ кратко пересказать
+        prompt = f"{SYSTEM_CORE}\nЗАДАЧА: Кратко, сухо, по-военному доложи суть этих новостей. Без лишних слов.\n\nДАННЫЕ:\n{news_body}"
+        ans = await get_ai_response(prompt)
+        await message.reply(ans)
+        
+    except Exception as e:
+        logger.error(f"News error: {e}")
+        await message.reply("Ошибка соединения с поисковым кластером.")
+    finally:
+        await bot.delete_message(message.chat.id, wait.message_id)
+
+# --- ПОЧИНЕННОЕ РИСОВАНИЕ (Новая ссылка) ---
 @dp.message(Command("draw"))
 async def cmd_draw(message: types.Message):
     prompt = message.text[5:].strip()
-    if not prompt: return
-    wait = await message.answer("Изучаю объект...")
-    
-    # Краткий поиск для точности рисунка
-    desc = ""
+    if not prompt: 
+        await message.reply("Укажи, что рисовать.")
+        return
+        
+    wait = await message.answer("Обработка запроса...")
     try:
-        with DDGS() as ddgs:
-            r = list(ddgs.text(f"{prompt} appearance description", max_results=1))
-            if r: desc = r[0]['body']
-    except: pass
-
-    # Создаем промпт для генератора
-    enrich_q = f"Write a professional English image prompt for '{prompt}' using these details: {desc}. Output only prompt."
-    final_p = await get_ai_response(enrich_q)
-    
-    try:
+        # 1. Сначала переводим запрос на английский через ИИ (так точнее)
+        trans_prompt = f"Translate this visual description to English for image generation. Output ONLY the English text: {prompt}"
+        eng_prompt = await get_ai_response(trans_prompt)
+        
+        # 2. Формируем ссылку по НОВОМУ стандарту (без image.pollinations)
         seed = random.randint(0, 999999)
-        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(final_p)}?width=1024&height=1024&nologo=true&seed={seed}"
-        status = random.choice(MY_TITLES) if str(message.from_user.id) == ADMIN_ID else "смертный"
-        await message.reply_photo(photo=url, caption=f"Проекция готова, {status}.")
-    except:
-        await message.answer("Сбой визуализации.")
-    await bot.delete_message(message.chat.id, wait.message_id)
+        safe_prompt = urllib.parse.quote(eng_prompt)
+        # Прямая ссылка на генерацию
+        image_url = f"https://pollinations.ai/p/{safe_prompt}?width=1024&height=1024&seed={seed}&model=flux"
+        
+        await message.reply_photo(photo=image_url, caption=f"Изображение готово, {random.choice(MY_TITLES) if str(message.from_user.id) == ADMIN_ID else 'смертный'}.")
+        
+    except Exception as e:
+        logger.error(f"Draw error: {e}")
+        await message.reply("Модуль визуализации недоступен.")
+    finally:
+        await bot.delete_message(message.chat.id, wait.message_id)
 
-# --- ГОЛОС ---
-@dp.message(Command("say"))
-async def cmd_say(message: types.Message):
-    text = message.text[4:].strip()
-    if not text: return
-    try:
-        communicate = edge_tts.Communicate(text, "ru-RU-DmitryNeural")
-        voice_io = io.BytesIO()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio": voice_io.write(chunk["data"])
-        voice_io.seek(0)
-        await message.answer_voice(voice=types.BufferedInputFile(voice_io.read(), filename="idel.ogg"))
-    except: pass
-
-# --- ТЕКСТОВЫЙ ПРОЦЕССОР ---
+# --- ОБРАБОТЧИК СООБЩЕНИЙ ---
 async def process_text(message: types.Message):
     u_id = str(message.from_user.id)
     is_owner = (u_id == ADMIN_ID)
     
-    if u_id not in user_memories:
-        user_memories[u_id] = deque(maxlen=2) # Короткая память для экономии токенов
-
-    status = f"Твой ГОСПОДИН {random.choice(MY_TITLES)}" if is_owner else f"Перед тобой {random.choice(SCUM_TITLES)}"
-    history = "\n".join([f"{m['role']}: {m['content']}" for m in user_memories[u_id]])
+    # Очень короткая память (1 сообщение), чтобы он не зацикливался
+    if u_id not in user_memories: user_memories[u_id] = deque(maxlen=1)
     
-    prompt = f"{SYSTEM_CORE}\nСтатус юзера: {status}\nИстория: {history}\nВвод: {message.text}"
+    role = f"Хозяин ({random.choice(MY_TITLES)})" if is_owner else "Пользователь (Смертный)"
+    prev_msg = user_memories[u_id][0] if user_memories[u_id] else ""
+    
+    prompt = f"{SYSTEM_CORE}\nКТО ПИШЕТ: {role}\nПРЕДЫДУЩЕЕ: {prev_msg}\nВВОД: {message.text}"
+    
     ans = await get_ai_response(prompt)
-    
     await message.answer(ans)
-    user_memories[u_id].append({"role": "user", "content": message.text})
-    user_memories[u_id].append({"role": "assistant", "content": ans})
+    
+    # Обновляем память (только последнее сообщение)
+    user_memories[u_id].append(f"Q:{message.text} A:{ans}")
 
 @dp.message()
 async def main_handler(message: types.Message):
     if not message.text: return
-    # Ответ в ЛС, при упоминании или ответе на сообщение бота
-    should = (
-        message.chat.type == 'private' or 
-        "идел" in message.text.lower() or 
-        (message.reply_to_message and message.reply_to_message.from_user.id == bot.id)
-    )
-    if should:
+    # Отвечаем только в ЛС или если упомянули "идел"
+    if message.chat.type == 'private' or "идел" in message.text.lower() or (message.reply_to_message and message.reply_to_message.from_user.id == bot.id):
         asyncio.create_task(process_text(message))
 
-# --- WEB СЕРВЕР И ЗАПУСК ---
+# --- ЗАПУСК ---
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="Idel Online"))
-    runner = web.AppRunner(app); await runner.setup()
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.Response(text="Idel Stable Online"))
+    runner = web.AppRunner(app)
+    await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
     
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) 

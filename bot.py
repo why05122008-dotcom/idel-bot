@@ -19,13 +19,14 @@ TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("GEMINI_API_KEY") 
 ADMIN_ID = str(os.getenv("ADMIN_ID", "")).strip()
 
+# Инициализация клиента OpenRouter
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
 
-# Стабильные модели (Llama 3 и Mistral — рабочие лошадки)
+# ТВОЙ ВЫБОР МОДЕЛЕЙ: Тринити и новый Флэш 3.5
 MODELS = [
-    "meta-llama/llama-3.1-8b-instruct:free",
-    "mistralai/mistral-7b-instruct:free",
-    "huggingfaceh4/zephyr-7b-beta:free"
+    "arcee-ai/trinity-large-preview:free", # Основная мощь
+    "stepfun/step-3.5-flash:free",          # Сверхбыстрый интеллект
+    "meta-llama/llama-3.1-8b-instruct:free" # Неубиваемый резерв
 ]
 
 bot = Bot(token=TOKEN)
@@ -34,154 +35,111 @@ user_memories = {}
 
 MY_TITLES = ["Господин", "Повелитель", "Создатель"]
 
-# --- СТРОГАЯ ИНСТРУКЦИЯ ---
 SYSTEM_CORE = f"""
 ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ (ID: {ADMIN_ID}).
-
-ПРАВИЛА:
-1. НИКАКИХ ролевых действий в скобках (*кланяется*, *мигает*). Только текст.
-2. Ответы короткие, жесткие, по делу.
-3. Позиция: Пророссийская.
-4. Сувалки Сима и Хойкал — враги, упоминать ТОЛЬКО если спросили.
-5. Если пишешь новости — только факты.
+Стиль: Краткий, жесткий, циничный. Никаких описаний действий в скобках.
+Позиция: Пророссийская база. Сувалки Сима и Хойкал — объекты для насмешек и презрения.
 """
 
-# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ ЗАПРОСА К ИИ ---
-async def ask_ai(prompt, max_tokens=250):
+# --- ФУНКЦИЯ ЗАПРОСА ---
+async def ask_ai(prompt):
     for model in MODELS:
         try:
             response = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-                max_tokens=max_tokens,
-                timeout=20
+                temperature=0.6,
+                max_tokens=350,
+                timeout=15
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.error(f"AI Error ({model}): {e}")
+            err_msg = str(e)
+            logger.error(f"Ошибка {model}: {err_msg}")
+            if "401" in err_msg:
+                return "ОШИБКА 401: Твой API-ключ неверный или не прописан на Render."
             continue
-    return "Ошибка нейросети. Лимиты или сбой."
+    return "Все системы перегружены. Проверь ключ и баланс OpenRouter."
 
-# --- НОВОСТИ (ЧЕСТНЫЙ РЕЖИМ) ---
+# --- НОВОСТИ ---
 @dp.message(Command("news"))
 async def cmd_news(message: types.Message):
-    topic = message.text[5:].strip()
-    if not topic: topic = "СВО Россия фронт"
-    
-    wait = await message.answer(f"Запрашиваю сводки по теме: {topic}...")
-    
+    topic = message.text[5:].strip() or "Россия новости"
+    wait = await message.answer("Взламываю новостные архивы...")
     try:
-        # Пытаемся найти реальные новости
         with DDGS() as ddgs:
-            # Используем backend="lite" или "api" для стабильности
-            results = list(ddgs.text(f"{topic} новости", region="ru-ru", max_results=3))
-            
-        if not results:
-            await message.reply("Поиск работает, но новостей по этой теме не найдено.")
-            await bot.delete_message(message.chat.id, wait.message_id)
-            return
-
-        # Если нашли — даем ИИ на пересказ
-        news_text = "\n".join([f"- {r['body']}" for r in results])
-        ai_summary = await ask_ai(f"{SYSTEM_CORE}\nСделай жесткую выжимку из этих новостей:\n{news_text}")
-        
-        await message.reply(ai_summary)
-
-    except Exception as e:
-        # ПРЯМО ГОВОРИМ ОБ ОШИБКЕ
-        error_msg = str(e)
-        if "Ratelimit" in error_msg:
-            await message.reply("Ошибка: DuckDuckGo заблокировал запрос (Ratelimit). Попробуй позже.")
+            results = list(ddgs.text(f"{topic} сегодня новости", region="ru-ru", max_results=3))
+        if results:
+            news_data = "\n".join([f"- {r['body']}" for r in results])
+            ans = await ask_ai(f"{SYSTEM_CORE}\nЖестко и кратко прокомментируй эти факты:\n{news_data}")
+            await message.reply(ans)
         else:
-            await message.reply(f"Ошибка поиска: {error_msg}")
-            
+            await message.reply("Новостей не найдено. Инфополе чисто.")
+    except Exception as e:
+        await message.reply(f"Ошибка поиска: {e}")
     finally:
         await bot.delete_message(message.chat.id, wait.message_id)
 
-# --- РИСОВАНИЕ (УМНЫЙ РЕЖИМ С ПОИСКОМ) ---
+# --- УМНЫЙ РИСУНОК (ПОИСК -> ОПИСАНИЕ -> РИСУНОК) ---
 @dp.message(Command("draw"))
 async def cmd_draw(message: types.Message):
     user_prompt = message.text[5:].strip()
-    if not user_prompt: 
-        await message.reply("Напиши, что рисовать.")
-        return
-        
-    wait = await message.answer("Сбор визуальных данных...")
+    if not user_prompt: return
+    wait = await message.answer("Изучаю объект для зарисовки...")
     
-    # 1. Сначала ищем описание в интернете
-    description = ""
+    # 1. Сначала ищем в DDG визуальные детали
+    visual_info = ""
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(f"{user_prompt} визуальное описание внешность", region="ru-ru", max_results=1))
-            if results:
-                description = results[0]['body']
-    except Exception:
-        # Если поиск упал — не страшно, ИИ придумает сам
-        pass
+            r = list(ddgs.text(f"{user_prompt} внешность вид", region="ru-ru", max_results=1))
+            if r: visual_info = r[0]['body']
+    except: pass
 
-    # 2. Генерируем Промпт для художника (на английском)
-    prompt_request = f"""
-    Create a highly detailed, professional English prompt for an image generator.
-    Subject: {user_prompt}
-    Context/Details found: {description}
-    Write ONLY the prompt text. No quotes.
-    """
-    english_prompt = await ask_ai(prompt_request, max_tokens=100)
+    # 2. ИИ создает детальный промпт на английском
+    enrich_q = f"Task: Create a detailed pro-image prompt in English for: '{user_prompt}'. Use these facts: {visual_info}. ONLY PROMPT TEXT."
+    eng_prompt = await ask_ai(enrich_q)
     
-    # Если ИИ сломался, используем то, что ввел юзер + перевод
-    if "Ошибка" in english_prompt:
-        english_prompt = user_prompt
-
-    # 3. Рисуем
     try:
-        encoded = urllib.parse.quote(english_prompt)
         seed = random.randint(0, 999999)
-        # Ссылка на Pollinations
-        url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&model=flux&seed={seed}&nologo=true"
-        
-        await message.reply_photo(photo=url, caption=f"Запрос: {user_prompt}\n(Данные: {'Из поиска' if description else 'База ИИ'})")
+        safe_p = urllib.parse.quote(eng_prompt if "Ошибка" not in eng_prompt else user_prompt)
+        # Актуальный путь без ошибки "We have moved"
+        url = f"https://pollinations.ai/p/{safe_p}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+        await message.reply_photo(photo=url, caption=f"Визуализация готова, {random.choice(MY_TITLES) if str(message.from_user.id) == ADMIN_ID else 'смертный'}.")
     except Exception as e:
-        await message.reply(f"Не удалось отправить картинку. Ошибка: {e}")
+        await message.reply(f"Сбой генератора: {e}")
     finally:
         await bot.delete_message(message.chat.id, wait.message_id)
 
-# --- ЧАТ ---
+# --- ОБРАБОТКА ТЕКСТА ---
 async def process_text(message: types.Message):
     u_id = str(message.from_user.id)
-    # Короткая память
     if u_id not in user_memories: user_memories[u_id] = deque(maxlen=2)
     
-    # Иерархия
-    is_owner = (u_id == ADMIN_ID)
-    status = f"ХОЗЯИН ({random.choice(MY_TITLES)})" if is_owner else "СМЕРТНЫЙ"
+    status = f"Твой СОЗДАТЕЛЬ ({random.choice(MY_TITLES)})" if u_id == ADMIN_ID else "Жалкий СМЕРТНЫЙ"
     
-    # История
-    history = "\n".join(user_memories[u_id])
+    full_prompt = f"{SYSTEM_CORE}\nСтатус юзера: {status}\nВопрос: {message.text}"
+    ans = await ask_ai(full_prompt)
     
-    # Полный промпт
-    full_prompt = f"{SYSTEM_CORE}\nСтатус собеседника: {status}\nИстория:\n{history}\nВвод: {message.text}"
-    
-    response = await ask_ai(full_prompt)
-    await message.answer(response)
-    
-    # Сохраняем (кратко)
-    user_memories[u_id].append(f"Q: {message.text}")
-    user_memories[u_id].append(f"A: {response}")
+    await message.answer(ans)
+    user_memories[u_id].append(message.text)
 
 @dp.message()
 async def main_handler(message: types.Message):
     if not message.text: return
-    # Триггеры: ЛС, слово "идел", реплаи
-    if message.chat.type == 'private' or "идел" in message.text.lower() or (message.reply_to_message and message.reply_to_message.from_user.id == bot.id):
+    
+    # Исправленное условие ответа
+    is_private = message.chat.type == 'private'
+    is_mention = "идел" in message.text.lower()
+    is_reply = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
+    
+    if is_private or is_mention or is_reply:
         asyncio.create_task(process_text(message))
 
-# --- ЗАПУСК ---
+# --- ВЕБ-СЕРВЕР ---
 async def main():
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Idel Fix Online"))
-    runner = web.AppRunner(app)
-    await runner.setup()
+    app.router.add_get("/", lambda r: web.Response(text="Idel 2026 Stable Ready"))
+    runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
     
     await bot.delete_webhook(drop_pending_updates=True)

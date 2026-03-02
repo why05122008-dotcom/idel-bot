@@ -15,52 +15,53 @@ ADMIN_ID = str(os.getenv("ADMIN_ID", "")).strip()
 
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
 
-# Самые стабильные модели на сегодня
+# Лучший бесплатный сетап на сегодня
 MODELS = [
     "stepfun/step-3.5-flash:free",
-    "google/gemini-flash-1.5-8b:free",
-    "arcee-ai/trinity-large-preview:free"
+    "arcee-ai/trinity-large-preview:free",
+    "google/gemini-flash-1.5-8b:free"
 ]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ЖЕСТКИЙ СИСТЕМНЫЙ ПРОМПТ (Запрет на иностранные языки)
 SYSTEM_CORE = f"""
-ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ.
-ОТВЕЧАЙ СТРОГО НА РУССКОМ ЯЗЫКЕ.
-Стиль: Кратко, база, без пафоса.
-Про Хойкала и Сувалки молчи, пока не спросят.
+ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ (ID: {ADMIN_ID}).
+ОТВЕЧАЙ СТРОГО НА РУССКОМ. Кратко, 1-2 предложения.
+Стиль: База. Без эмоций. Без лишних слов.
 """
 
 async def ask_ai(prompt):
+    if not API_KEY: return "Ошибка: API_KEY не найден в Render."
     for model in MODELS:
         try:
             res = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt + " (ОТВЕТЬ НА РУССКОМ)"}],
-                temperature=0.3,
-                max_tokens=250,
+                temperature=0.4,
+                max_tokens=300,
                 timeout=15
             )
             return res.choices[0].message.content.strip()
         except Exception as e:
             logger.error(f"Сбой {model}: {e}")
+            if "401" in str(e): return "Ошибка 401: Твой ключ не работает. Замени его на OpenRouter."
             continue
-    return "Ошибка связи с ядром."
+    return "Сбой всех нейросетей."
 
 @dp.message(Command("news"))
 async def cmd_news(message: types.Message):
     topic = message.text[5:].strip() or "Россия новости"
-    wait = await message.answer("Сводка новостей...")
+    wait = await message.answer("Взламываю инфополе...")
     try:
         with DDGS() as ddgs:
-            # Поиск только на русском
-            r = list(ddgs.text(f"{topic} сегодня", region="ru-ru", max_results=2))
+            # Расширенный поиск для лучшей информации
+            r = list(ddgs.text(f"{topic} 2026 сегодня", region="ru-ru", max_results=3))
         if r:
-            ans = await ask_ai(f"Сделай краткую выжимку новостей на РУССКОМ: {r[0]['body']}")
+            news_text = "\n".join([i['body'] for i in r])
+            ans = await ask_ai(f"Коротко и четко резюмируй новости на русском:\n{news_text}")
             await message.reply(ans)
-        else: await message.reply("Новостей не найдено.")
+        else: await message.reply("Новостей нет.")
     except Exception as e: await message.reply(f"Ошибка поиска: {e}")
     finally: await bot.delete_message(message.chat.id, wait.message_id)
 
@@ -68,32 +69,27 @@ async def cmd_news(message: types.Message):
 async def cmd_draw(message: types.Message):
     p = message.text[5:].strip()
     if not p: return
-    
-    # Новый движок Flux (Нано Банана аналоги отдыхают)
     seed = random.randint(0, 999999)
-    safe_prompt = urllib.parse.quote(p)
-    # Используем обновленный стабильный URL
-    url = f"https://pollinations.ai/p/{safe_prompt}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
-    
+    # Исправленный URL для Pollinations (модель Flux)
+    url = f"https://pollinations.ai/p/{urllib.parse.quote(p)}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
-        await message.reply_photo(photo=url, caption=f"Визуализация: {p}")
-    except Exception as e:
-        await message.reply("Сбой отрисовки.")
+        await message.reply_photo(photo=url, caption="Сделано.")
+    except Exception as e: await message.reply("Ошибка генерации.")
 
 @dp.message()
 async def main_handler(message: types.Message):
     if not message.text: return
+    # Улучшенная логика игнора: бот отвечает, если упомянут или в ЛС
     if message.chat.type == 'private' or "идел" in message.text.lower() or (message.reply_to_message and message.reply_to_message.from_user.id == bot.id):
         ans = await ask_ai(f"{SYSTEM_CORE}\nВопрос: {message.text}")
         await message.answer(ans)
 
 async def main():
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Idel Core Active"))
+    app.router.add_get("/", lambda r: web.Response(text="Idel Online"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())

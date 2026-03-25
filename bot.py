@@ -4,19 +4,20 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
 from openai import AsyncOpenAI
 from aiohttp import web
-from duckduckgo_search import AsyncDDGS
+from duckduckgo_search import DDGS # В новых версиях используется единый класс
 
-# Логирование
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Конфиг
+# Конфигурация из переменных окружения
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("GEMINI_API_KEY") 
-ADMIN_ID = os.getenv("ADMIN_ID", "Неизвестен")
+ADMIN_ID = str(os.getenv("ADMIN_ID", "Не указан")).strip()
 
-# Клиенты
+# Клиент OpenRouter
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
+
 MODELS = [
     "stepfun/step-3.5-flash:free",
     "arcee-ai/trinity-large-preview:free",
@@ -26,13 +27,13 @@ MODELS = [
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Глобальная сессия для запросов (инициализируем в main)
+# Хранилище для глобальной сессии
 session_storage = {"session": None}
 
 SYSTEM_CORE = f"ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ (ID: {ADMIN_ID}). ОТВЕЧАЙ СТРОГО НА РУССКОМ. Кратко, 1-2 предложения. Стиль: База. Без эмоций."
 
 async def ask_ai(prompt):
-    if not API_KEY: return "Ошибка: API_KEY отсутствует."
+    if not API_KEY: return "Ошибка: API_KEY не найден."
     for model in MODELS:
         try:
             res = await client.chat.completions.create(
@@ -43,7 +44,7 @@ async def ask_ai(prompt):
                 ],
                 temperature=0.4,
                 max_tokens=300,
-                timeout=15 # Чуть уменьшил для отзывчивости
+                timeout=20
             )
             return res.choices[0].message.content.strip()
         except Exception as e:
@@ -57,19 +58,19 @@ async def cmd_news(message: types.Message, command: CommandObject):
     wait = await message.answer("🔍 Взламываю инфополе...")
     
     try:
-        async with AsyncDDGS() as ddgs:
-            # В 2026 DuckDuckGo может требовать актуализации параметров
-            results = await ddgs.text(f"{topic} 2026", region="ru-ru", max_results=3)
+        # Новый асинхронный вызов DDGS для версий 8.x.x+
+        with DDGS() as ddgs:
+            results = ddgs.text(f"{topic} 2026 сегодня", region="ru-ru", max_results=3)
         
         if results:
-            news_content = "\n".join([i['body'] for i in results])
+            news_content = "\n".join([i.get('body', '') for i in results])
             ans = await ask_ai(f"Сделай краткую выжимку новостей:\n{news_content}")
             await message.reply(ans)
         else:
-            await message.reply("Новостей нет.")
+            await message.reply("Новостей по этому запросу нет.")
     except Exception as e:
         logger.error(f"Ошибка поиска: {e}")
-        await message.reply("Ошибка поиска.")
+        await message.reply("Ошибка поиска. Попробуй позже.")
     finally:
         await wait.delete()
 
@@ -77,30 +78,29 @@ async def cmd_news(message: types.Message, command: CommandObject):
 async def cmd_draw(message: types.Message, command: CommandObject):
     prompt = command.args
     if not prompt:
-        return await message.reply("Напиши промпт. Пример: /draw киберпанк")
+        return await message.reply("Напиши, что нарисовать. Пример: /draw киберпанк город")
     
     seed = random.randint(0, 999999)
     url = f"https://pollinations.ai/p/{urllib.parse.quote(prompt)}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     
     try:
-        # Используем глобальную сессию
+        # Используем общую сессию для загрузки
         async with session_storage["session"].get(url, timeout=40) as resp:
             if resp.status == 200:
                 data = await resp.read()
                 photo = types.BufferedInputFile(data, filename="draw.jpg")
                 await message.reply_photo(photo=photo, caption="Сделано.")
             else:
-                await message.reply("Сервис генерации занят.")
+                await message.reply("Сервис генерации временно недоступен.")
     except Exception as e:
         logger.error(f"Ошибка отрисовки: {e}")
-        await message.reply("Ошибка при создании.")
+        await message.reply("Ошибка при создании изображения.")
 
 @dp.message(F.text)
 async def main_handler(message: types.Message):
-    # Улучшенная проверка: ищем слово "идел" отдельно, а не внутри других слов
     text_lower = message.text.lower()
     is_private = message.chat.type == 'private'
-    is_mentioned = "идел" in text_lower.split() 
+    is_mentioned = "идел" in text_lower.split()
     is_reply_to_me = message.reply_to_message and message.reply_to_message.from_user.id == bot.id
     
     if is_private or is_mentioned or is_reply_to_me:
@@ -109,30 +109,30 @@ async def main_handler(message: types.Message):
         await message.answer(ans)
 
 async def handle_root(request):
-    return web.Response(text="Idel Status: Online")
+    return web.Response(text="Idel Online 2026")
 
 async def main():
-    # Инициализируем общую сессию
+    # Инициализация сессии
     session_storage["session"] = aiohttp.ClientSession()
     
+    # Настройка веб-сервера для Render (Keep-alive)
     app = web.Application()
     app.router.add_get("/", handle_root)
     runner = web.AppRunner(app)
     await runner.setup()
-    
-    # Render использует переменную PORT
-    port = int(os.getenv("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000)))
     
     await site.start()
     await bot.delete_webhook(drop_pending_updates=True)
     
+    logger.info("Бот ИДЕЛ запущен!")
     try:
-        logger.info(f"Бот запущен на порту {port}")
         await dp.start_polling(bot)
     finally:
-        # Закрываем сессию при выключении
         await session_storage["session"].close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен.") 

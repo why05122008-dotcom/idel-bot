@@ -10,16 +10,15 @@ from duckduckgo_search import DDGS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Конфигурация из Environment Variables на Render
+# Конфигурация из Environment Variables
 TOKEN = os.getenv("BOT_TOKEN")
-API_KEY = os.getenv("GEMINI_API_KEY") # Убедись, что тут ключ именно от OpenRouter
+API_KEY = os.getenv("GEMINI_API_KEY") 
 
-# Обновленный список актуальных БЕСПЛАТНЫХ моделей OpenRouter (на весну 2026)
+# Обновленный список: твои фавориты в приоритете
 TEXT_MODELS = [
-    "google/gemini-2.0-flash-lite-preview-02-05:free",
-    "meta-llama/llama-3-8b-instruct:free",
-    "qwen/qwen-2.5-72b-instruct:free",
-    "google/gemini-2.0-pro-exp-02-05:free"
+    "stepfun/step-3.5-flash:free",
+    "arcee-ai/trinity-mini:free",
+    "google/gemini-2.0-flash-lite-preview-02-05:free" # Резерв, если первые две лягут
 ]
 
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
@@ -41,7 +40,7 @@ async def ask_ai(prompt, is_news=False):
                 messages=[{"role": "system", "content": system_text}, {"role": "user", "content": prompt}],
                 temperature=0.6,
                 max_tokens=250,
-                timeout=15 
+                timeout=20 # Увеличили время ожидания до 20 секунд
             )
             return res.choices[0].message.content.strip()
         except Exception as e:
@@ -75,15 +74,17 @@ async def cmd_draw(message: types.Message, command: CommandObject):
     prompt = command.args
     if not prompt: return await message.reply("Напиши, что рисовать.")
     
-    wait = await message.answer("🎨 Рисую, подожди...")
-    
-    # Правильный эндпоинт Pollinations для генерации картинок
-    url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&nologo=true&seed={random.randint(0, 999999)}"
+    wait = await message.answer("🎨 Рисую, подожди пару секунд...")
+    safe_prompt = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1024&height=1024&nologo=true&seed={random.randint(0, 999999)}"
     
     try:
-        # Скачиваем картинку в память, чтобы Telegram 100% её принял
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=30) as resp:
+        # Добавляем фейковый User-Agent, чтобы Pollinations не блокировал запрос
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(url, timeout=45) as resp:
                 if resp.status == 200:
                     photo_bytes = await resp.read()
                     await message.reply_photo(
@@ -91,20 +92,22 @@ async def cmd_draw(message: types.Message, command: CommandObject):
                         caption=f"🎨 {prompt}"
                     )
                 else:
-                    await message.reply("Сервер генерации картинок не ответил.")
+                    await message.reply(f"Сервер генерации картинок не ответил. Код ошибки: {resp.status}")
     except Exception as e:
         logger.error(f"Draw error: {e}")
-        await message.reply("Не удалось создать арт.")
+        await message.reply("Не удалось создать арт. Ошибка сети.")
     finally:
-        await wait.delete()
+        try:
+            await wait.delete()
+        except:
+            pass
 
 @dp.message(Command("video"))
 async def cmd_video(message: types.Message, command: CommandObject):
     prompt = command.args
     if not prompt: return await message.reply("Опиши видео.")
     
-    # Объясняем ситуацию юзерам, чтобы бот не крашился в консоли
-    await message.reply("🎬 Генерация видео пока приостановлена. Бесплатные нейросети сейчас не выдают прямые .mp4 файлы. Ищем новые API!")
+    await message.reply("🎬 Бесплатные нейросети сейчас не выдают прямые .mp4 файлы для Телеграма. Команда временно отключена.")
 
 @dp.message(F.text)
 async def main_handler(message: types.Message):
@@ -114,7 +117,7 @@ async def main_handler(message: types.Message):
         ans = await ask_ai(clean)
         await message.answer(ans)
 
-# Костыль для Render, чтобы сервис не засыпал
+# Костыль для Render
 async def handle_root(request):
     return web.Response(text="Idel Online 2026 Stable Build")
 

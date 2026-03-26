@@ -3,3 +3,4 @@ openai
 aiohttp
 duckduckgo_search
 edge-tts
+supabase

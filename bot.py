@@ -1,8 +1,7 @@
 import os, asyncio, logging, random, urllib.parse
-import aiohttp
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, CommandObject
-from aiogram.types import BufferedInputFile
+from collections import deque
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from openai import AsyncOpenAI
 from aiohttp import web
 from duckduckgo_search import DDGS
@@ -10,130 +9,87 @@ from duckduckgo_search import DDGS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Конфигурация из Environment Variables
+# Данные из твоего профиля
 TOKEN = os.getenv("BOT_TOKEN")
 API_KEY = os.getenv("GEMINI_API_KEY") 
-
-# Обновленный список: твои фавориты в приоритете
-TEXT_MODELS = [
-    "stepfun/step-3.5-flash:free",
-    "arcee-ai/trinity-mini:free",
-    "google/gemini-2.0-flash-lite-preview-02-05:free" # Резерв, если первые две лягут
-]
+ADMIN_ID = str(os.getenv("ADMIN_ID", "8464693849")).strip()
 
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
+
+# Твой золотой стандарт моделей
+MODELS = [
+    "arcee-ai/trinity-large-preview:free",
+    "stepfun/step-3.5-flash:free",
+    "google/gemini-flash-1.5-8b:free"
+]
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Базовые настройки личности
-SYSTEM_CORE = "ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ. Отвечай кратко, база, 1-2 предложения."
+SYSTEM_CORE = f"""
+ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ.
+ОТВЕЧАЙ СТРОГО НА РУССКОМ. Кратко, по делу.
+Про Хойкала и Сувалки молчи, пока не спросят прямо.
+"""
 
-async def ask_ai(prompt, is_news=False):
-    if not API_KEY: return "Ошибка: Добавь API_KEY в настройки."
-    
-    system_text = SYSTEM_CORE + (" Сделай краткую выжимку новостей одной фразой." if is_news else "")
-    
-    for model in TEXT_MODELS:
+async def ask_ai(prompt):
+    for model in MODELS:
         try:
             res = await client.chat.completions.create(
                 model=model,
-                messages=[{"role": "system", "content": system_text}, {"role": "user", "content": prompt}],
-                temperature=0.6,
-                max_tokens=250,
-                timeout=20 # Увеличили время ожидания до 20 секунд
+                messages=[{"role": "user", "content": prompt + " (ОТВЕТЬ НА РУССКОМ)"}],
+                temperature=0.4,
+                max_tokens=300,
+                timeout=15
             )
             return res.choices[0].message.content.strip()
         except Exception as e:
-            logger.warning(f"Сбой модели {model}: {e}. Пробую следующую...")
+            logger.error(f"Сбой {model}: {e}")
             continue
-            
-    return "Все нейросети сейчас лежат. Попробуй позже."
+    return "Ядро временно недоступно."
 
 @dp.message(Command("news"))
-async def cmd_news(message: types.Message, command: CommandObject):
-    topic = command.args or "новости"
-    wait = await message.answer("🔍 Чекаю инфополе...")
+async def cmd_news(message: types.Message):
+    topic = message.text[5:].strip() or "Россия новости"
+    wait = await message.answer("Вскрываю инфополе...")
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(f"{topic} 2026", region="ru-ru", max_results=3))
-        
-        if results:
-            blob = "\n".join([r['body'] for r in results])
-            ans = await ask_ai(blob, is_news=True)
+            r = list(ddgs.text(f"{topic} сегодня", region="ru-ru", max_results=3))
+        if r:
+            news_data = "\n".join([i['body'] for i in r])
+            ans = await ask_ai(f"Сделай краткую базу по новостям:\n{news_data}")
             await message.reply(ans)
-        else:
-            await message.reply("Ничего не нашел по этому запросу.")
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        await message.reply("Поиск временно сломан.")
-    finally:
-        await wait.delete()
+        else: await message.reply("Новостей по теме нет.")
+    except Exception as e: await message.reply(f"Ошибка поиска: {e}")
+    finally: await bot.delete_message(message.chat.id, wait.message_id)
 
 @dp.message(Command("draw"))
-async def cmd_draw(message: types.Message, command: CommandObject):
-    prompt = command.args
-    if not prompt: return await message.reply("Напиши, что рисовать.")
-    
-    wait = await message.answer("🎨 Рисую, подожди пару секунд...")
-    safe_prompt = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1024&height=1024&nologo=true&seed={random.randint(0, 999999)}"
-    
+async def cmd_draw(message: types.Message):
+    p = message.text[5:].strip()
+    if not p: return
+    seed = random.randint(0, 999999)
+    # Прямая ссылка на Flux
+    url = f"https://pollinations.ai/p/{urllib.parse.quote(p)}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
     try:
-        # Добавляем фейковый User-Agent, чтобы Pollinations не блокировал запрос
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, timeout=45) as resp:
-                if resp.status == 200:
-                    photo_bytes = await resp.read()
-                    await message.reply_photo(
-                        photo=BufferedInputFile(photo_bytes, filename="art.jpg"), 
-                        caption=f"🎨 {prompt}"
-                    )
-                else:
-                    await message.reply(f"Сервер генерации картинок не ответил. Код ошибки: {resp.status}")
-    except Exception as e:
-        logger.error(f"Draw error: {e}")
-        await message.reply("Не удалось создать арт. Ошибка сети.")
-    finally:
-        try:
-            await wait.delete()
-        except:
-            pass
+        await message.reply_photo(photo=url, caption=f"Визуализация: {p}")
+    except Exception as e: await message.reply("Генератор занят.")
 
-@dp.message(Command("video"))
-async def cmd_video(message: types.Message, command: CommandObject):
-    prompt = command.args
-    if not prompt: return await message.reply("Опиши видео.")
-    
-    await message.reply("🎬 Бесплатные нейросети сейчас не выдают прямые .mp4 файлы для Телеграма. Команда временно отключена.")
-
-@dp.message(F.text)
+@dp.message()
 async def main_handler(message: types.Message):
-    txt = message.text.lower()
-    if message.chat.type == 'private' or "идел" in txt or (message.reply_to_message and message.reply_to_message.from_user.id == bot.id):
-        clean = txt.replace("идел", "").strip() or "привет"
-        ans = await ask_ai(clean)
+    if not message.text: return
+    # Реакция на имя или ЛС
+    if message.chat.type == 'private' or "идел" in message.text.lower() or (message.reply_to_message and message.reply_to_message.from_user.id == bot.id):
+        ans = await ask_ai(f"{SYSTEM_CORE}\nВопрос: {message.text}")
         await message.answer(ans)
 
-# Костыль для Render
-async def handle_root(request):
-    return web.Response(text="Idel Online 2026 Stable Build")
-
-async def start_webserver():
-    app = web.Application()
-    app.router.add_get("/", handle_root)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 10000))
-    await web.TCPSite(runner, "0.0.0.0", port).start()
-
 async def main():
-    await start_webserver()
+    # Веб-сервер для поддержки Render
+    app = web.Application()
+    app.router.add_get("/", lambda r: web.Response(text="Idel Online"))
+    runner = web.AppRunner(app); await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
+    
     await bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Бот Идел успешно запущен!")
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == "__main__": asyncio.run(main())

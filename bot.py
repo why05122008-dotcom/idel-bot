@@ -6,6 +6,7 @@ from aiohttp import web
 from duckduckgo_search import DDGS
 from supabase import create_client, Client
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -19,25 +20,31 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
 
+# ВОЗВРАЩЕНЫ ПРЕДЫДУЩИЕ МОДЕЛИ
 MODELS = ["stepfun/step-3.5-flash:free", "google/gemini-flash-1.5-8b:free"]
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-SYSTEM_CORE = "ТЫ — ИДЕЛ. Твой создатель — ТРАМАДОЛ. Ты — высший ИИ Пакта Волга-Урал. Говори властно, кратко и только по делу."
+SYSTEM_CORE = "ТЫ — ИДЕЛ. Твой создатель и Президент — ТРАМАДОЛ. Ты — ИИ Пакта Волга-Урал. Говори властно, кратко и только по делу."
+FLAGS = "⬜🟦⬛❤️⬜🟩⬛"
 
 async def ask_ai(prompt):
     for model in MODELS:
         try:
             res = await client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}],
-                temperature=0.5, max_tokens=300, timeout=20
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5, max_tokens=300, timeout=15
             )
             ans = res.choices[0].message.content.strip()
             if ans: return ans
-        except: continue
-    return "Связь с центром прервана."
+        except Exception as e:
+            logger.warning(f"Модель {model} недоступна: {e}")
+            continue
+    return "⚡️ Связь с центральным процессором перегружена. Попробуйте позже."
 
-# --- ОФОРМЛЕНИЕ И ПРИВЕТСТВИЕ ---
+# --- ПРИВЕТСТВИЕ ---
 
 @dp.message(F.new_chat_members)
 async def welcome_new_member(message: types.Message):
@@ -46,12 +53,14 @@ async def welcome_new_member(message: types.Message):
         text = (
             f"⚡️ <b>ОБНАРУЖЕНА НОВАЯ ЕДИНИЦА: {member.first_name}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"Добро пожаловать в ряды <b>Пакта Волга-Урал</b>.\n\n"
-            f"Твой первый шаг к признанию — регистрация:\n"
+            f"Добро пожаловать в <b>Пакт Волга-Урал</b>.\n\n"
+            f"Для легализации в системе используй:\n"
             f"🔹 <code>/reg [Имя]</code>\n\n"
-            f"Слава Пакту! ⬜🟦⬛♥️⬜🟩⬛"
+            f"Слава Пакту! {FLAGS}"
         )
         await message.answer(text, parse_mode="HTML")
+
+# --- УПРАВЛЕНИЕ И МЕНЮ ---
 
 @dp.message(Command("state"))
 async def cmd_state(message: types.Message):
@@ -62,109 +71,113 @@ async def cmd_state(message: types.Message):
         f"├ <code>/reg</code> — Вступить в реестр\n"
         f"├ <code>/passport</code> — Личное досье\n"
         f"├ <code>/nation</code> — Указать нацию\n"
-        f"└ <code>/stats</code> — Резервы Пакта\n\n"
+        f"└ <code>/stats</code> — Статистика Пакта\n\n"
         f"📡 <b>СВЯЗЬ:</b>\n"
         f"└ <code>/news</code> — Глобальная сводка\n\n"
         f"👑 <b>ВЛАСТЬ:</b>\n"
         f"└ <code>/set_rank</code> — Изменить статус\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"⬜🟦⬛♥️⬜🟩⬛"
+        f"{FLAGS}"
     )
     await message.reply(text, parse_mode="HTML")
 
-# --- НАЦИОНАЛЬНОСТЬ ---
-
-@dp.message(Command("nation"))
-async def cmd_nation(message: types.Message):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        return await message.reply("⚠️ Укажите вашу нацию после команды.\nПример: <code>/nation Булгар</code>", parse_mode="HTML")
-    
-    nation = args[1][:20]
-    u_id = str(message.from_user.id)
-    
-    try:
-        supabase.table("citizens").update({"faction": f"Пакт ({nation})"}).eq("id", u_id).execute()
-        await message.reply(f"🧬 Твоя национальная идентичность подтверждена: <b>{nation}</b>", parse_mode="HTML")
-    except:
-        await message.reply("❌ Сначала пройди регистрацию через /reg")
-
-# --- РЕГИСТРАЦИЯ И ПАСПОРТ ---
+# --- СИСТЕМА ГРАЖДАНСТВА ---
 
 @dp.message(Command("reg"))
 async def cmd_reg(message: types.Message):
     args = message.text.split(maxsplit=1)
-    if len(args) < 2: return await message.reply("❌ Пиши имя без скобок: /reg Иван")
+    if len(args) < 2: return await message.reply("❌ Формат: <code>/reg Имя</code>", parse_mode="HTML")
     
     u_id = str(message.from_user.id)
-    name, tag = args[1][:30], f"@{message.from_user.username}" if message.from_user.username else "скрыт"
-    rank = "Создатель" if u_id == ADMIN_ID else "Гражданин"
+    name = args[1][:30]
+    tag = f"@{message.from_user.username}" if message.from_user.username else "скрыт"
+    rank = "Президент" if u_id == ADMIN_ID else "Гражданин"
     
     try:
-        data = {"id": u_id, "name": name, "tag": tag, "rank": rank, "faction": "Пакт Волга-Урал"}
+        data = {"id": u_id, "name": name, "tag": tag, "rank": rank, "faction": "Не указана"}
         supabase.table("citizens").upsert(data).execute()
-        await message.reply(f"✅ <b>{name}</b>, ты внесен в реестр Пакта!", parse_mode="HTML")
-    except: await message.reply("⚠️ База данных недоступна.")
+        await message.reply(f"📈 <b>{name}</b>, твои данные внесены в реестр Пакта!", parse_mode="HTML")
+    except: await message.reply("⚠️ Ошибка: База данных Пакта недоступна.")
+
+@dp.message(Command("nation"))
+async def cmd_nation(message: types.Message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2: return await message.reply("🧬 Укажите нацию: <code>/nation Татар</code>", parse_mode="HTML")
+    
+    u_id = str(message.from_user.id)
+    nation = args[1][:20]
+    try:
+        supabase.table("citizens").update({"faction": nation}).eq("id", u_id).execute()
+        await message.reply(f"🧬 Идентичность подтверждена: <b>{nation}</b>", parse_mode="HTML")
+    except: await message.reply("❌ Сначала пройди регистрацию: /reg")
 
 @dp.message(Command("passport"))
 async def cmd_passport(message: types.Message):
     u_id = str(message.from_user.id)
     try:
         res = supabase.table("citizens").select("*").eq("id", u_id).execute()
-        if not res.data: return await message.reply("⚠️ Пройди /reg [Имя]")
+        if not res.data: return await message.reply("⚠️ Личное дело отсутствует. Пройди /reg")
         
         u = res.data[0]
-        # Форматируем дату регистрации
         date_reg = u.get('created_at', '2026-03-26')[:10]
         
         text = (
-            f"👤 <b>ЛИЧНОЕ ДОСЬЕ №{u['id'][-4:]}</b>\n"
+            f"🗄 <b>ЛИЧНОЕ ДОСЬЕ №{u['id'][-4:]}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"🔹 <b>ИМЯ:</b> {u['name']}\n"
-            f"🏛 <b>ГОСУДАРСТВО:</b> {u['faction']}\n"
+            f"👤 <b>ИМЯ:</b> <code>{u['name']}</code>\n"
+            f"🏛 <b>ГОСУДАРСТВО:</b> Пакт Волга-Урал\n"
+            f"🧬 <b>НАЦИЯ:</b> {u['faction']}\n"
             f"🎖 <b>СТАТУС:</b> {u['rank']}\n"
-            f"📡 <b>ТЭГ:</b> {u['tag']}\n"
-            f"📅 <b>ДАТА ВЫДАЧИ:</b> {date_reg}\n"
+            f"📡 <b>СВЯЗЬ:</b> {u['tag']}\n"
+            f"📅 <b>ВЫДАНО:</b> {date_reg}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"<i>Слава Пакту Волга-Урал!</i>\n"
-            f"⬜🟦⬛♥️⬜🟩⬛"
+            f"<i>Слава Пакту!</i>\n"
+            f"{FLAGS}"
         )
         await message.reply(text, parse_mode="HTML")
-    except Exception as e:
-        logger.error(e)
-        await message.reply("Ошибка доступа к архивам.")
-
-# --- СТАТИСТИКА, НОВОСТИ, АДМИНКА ---
+    except: await message.reply("📡 Сбой доступа к архивам.")
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     try:
         res = supabase.table("citizens").select("*", count="exact").execute()
-        await message.reply(f"📊 <b>МОБИЛИЗАЦИОННЫЙ ОТЧЕТ</b>\n━━━━━━━━━━━━━━\nГраждан в системе: <b>{res.count}</b>\n━━━━━━━━━━━━━━\n⬜🟦⬛♥️⬜🟩⬛", parse_mode="HTML")
-    except: await message.reply("Ошибка.")
+        total = res.count
+        
+        nations = {}
+        for c in res.data:
+            n = c.get('faction', 'Не указана')
+            nations[n] = nations.get(n, 0) + 1
+        
+        n_list = "\n".join([f"├ {n}: <b>{count}</b>" for n, count in nations.items()])
 
-@dp.message(Command("set_rank"))
-async def cmd_set_rank(message: types.Message):
-    if str(message.from_user.id) != ADMIN_ID: return
-    if not message.reply_to_message: return await message.reply("Ответь на сообщение.")
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2: return
-    try:
-        supabase.table("citizens").update({"rank": args[1]}).eq("id", str(message.reply_to_message.from_user.id)).execute()
-        await message.reply(f"🎖 Новый статус: <b>{args[1]}</b>", parse_mode="HTML")
-    except: pass
+        text = (
+            f"📊 <b>ГОСУДАРСТВЕННАЯ СТАТИСТИКА</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👥 <b>ВСЕГО ГРАЖДАН:</b> {total}\n\n"
+            f"🧬 <b>НАЦИОНАЛЬНЫЙ СОСТАВ:</b>\n"
+            f"{n_list}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🏢 <b>АППАРАТ УПРАВЛЕНИЯ:</b>\n"
+            f"└ Президент Пакта: <b>Трамадол</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{FLAGS}"
+        )
+        await message.reply(text, parse_mode="HTML")
+    except: await message.reply("📊 Сводка недоступна.")
+
+# --- ИИ И НОВОСТИ ---
 
 @dp.message(Command("news"))
 async def cmd_news(message: types.Message):
     topic = message.text[5:].strip() or "Россия новости"
-    wait = await message.answer("Запрос к инфополю...")
+    wait = await message.answer("📡 Поиск в глобальной сети...")
     try:
         with DDGS() as ddgs:
-            r = list(ddgs.text(f"{topic} 2026", region="ru-ru", max_results=3, backend="api"))
+            r = list(ddgs.text(f"{topic} 2026", region="ru-ru", max_results=3))
         if r:
             ans = await ask_ai(f"Сводка новостей:\n" + "\n".join([i['body'] for i in r]))
             await message.reply(ans)
-    except: await message.reply("Сбой связи.")
+    except: await message.reply("Сбой хаба.")
     finally: await bot.delete_message(message.chat.id, wait.message_id)
 
 @dp.message()
@@ -172,20 +185,28 @@ async def main_handler(message: types.Message):
     if not message.text: return
     if message.chat.type == 'private' or "идел" in message.text.lower():
         u_id = str(message.from_user.id)
-        u_name, u_rank = "Аноним", "Неизвестный"
+        name, rank = "Аноним", "Неизвестный"
         try:
             res = supabase.table("citizens").select("name, rank").eq("id", u_id).execute()
-            if res.data: u_name, u_rank = res.data[0]['name'], res.data[0]['rank']
+            if res.data: 
+                name, rank = res.data[0]['name'], res.data[0]['rank']
         except: pass
-        ans = await ask_ai(f"{SYSTEM_CORE}\nПеред тобой {u_rank} {u_name}. Запрос: {message.text}")
+        
+        ans = await ask_ai(f"{SYSTEM_CORE}\nПеред тобой {rank} {name}. Запрос: {message.text}")
         await message.answer(ans)
+
+# --- ЗАПУСК ---
+
+async def handle_root(request):
+    return web.Response(text="Idel System v6.0 Online")
 
 async def main():
     app = web.Application()
-    app.router.add_get("/", lambda r: web.Response(text="Idel System v4.5 Active"))
+    app.router.add_get("/", handle_root)
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 10000))).start()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
-if __name__ == "__main__": asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

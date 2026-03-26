@@ -20,7 +20,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = AsyncOpenAI(base_url="https://openrouter.ai/api/v1", api_key=API_KEY)
 
-# ВОЗВРАЩЕНЫ ПРЕДЫДУЩИЕ МОДЕЛИ
+# Твои старые модели ИИ
 MODELS = ["stepfun/step-3.5-flash:free", "google/gemini-flash-1.5-8b:free"]
 
 bot = Bot(token=TOKEN)
@@ -72,10 +72,11 @@ async def cmd_state(message: types.Message):
         f"├ <code>/passport</code> — Личное досье\n"
         f"├ <code>/nation</code> — Указать нацию\n"
         f"└ <code>/stats</code> — Статистика Пакта\n\n"
-        f"📡 <b>СВЯЗЬ:</b>\n"
+        f"🛰 <b>СВЯЗЬ (ТЕСТ):</b>\n"
         f"└ <code>/news</code> — Глобальная сводка\n\n"
         f"👑 <b>ВЛАСТЬ:</b>\n"
-        f"└ <code>/set_rank</code> — Изменить статус\n"
+        f"├ <code>/set_rank</code> — Изменить статус\n"
+        f"└ <code>/verify</code> — Президентская печать\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"{FLAGS}"
     )
@@ -90,14 +91,17 @@ async def cmd_reg(message: types.Message):
     
     u_id = str(message.from_user.id)
     name = args[1][:30]
-    tag = f"@{message.from_user.username}" if message.from_user.username else "скрыт"
+    u_name_t = message.from_user.username
+    tag = f"@{u_name_t}" if u_name_t else "скрыт"
     rank = "Президент" if u_id == ADMIN_ID else "Гражданин"
     
     try:
         data = {"id": u_id, "name": name, "tag": tag, "rank": rank, "faction": "Не указана"}
         supabase.table("citizens").upsert(data).execute()
         await message.reply(f"📈 <b>{name}</b>, твои данные внесены в реестр Пакта!", parse_mode="HTML")
-    except: await message.reply("⚠️ Ошибка: База данных Пакта недоступна.")
+    except Exception as e: 
+        logger.error(f"Ошибка регистрации: {e}")
+        await message.reply("⚠️ Ошибка: База данных Пакта недоступна.")
 
 @dp.message(Command("nation"))
 async def cmd_nation(message: types.Message):
@@ -121,21 +125,28 @@ async def cmd_passport(message: types.Message):
         u = res.data[0]
         date_reg = u.get('created_at', '2026-03-26')[:10]
         
+        # Определяем статус верификации
+        v_status = "🛡 ПОДТВЕРЖДЕНА" if u.get('verification', False) else "❌ НЕ ПОДТВЕРЖДЕНА"
+        
+        # Визуальный апгрейд досье (Связь -> ТЭГ)
         text = (
             f"🗄 <b>ЛИЧНОЕ ДОСЬЕ №{u['id'][-4:]}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"👤 <b>ИМЯ:</b> <code>{u['name']}</code>\n"
             f"🏛 <b>ГОСУДАРСТВО:</b> Пакт Волга-Урал\n"
             f"🧬 <b>НАЦИЯ:</b> {u['faction']}\n"
+            f"🛡 <b>ПРОВЕРКА:</b> {v_status}\n"
             f"🎖 <b>СТАТУС:</b> {u['rank']}\n"
-            f"📡 <b>СВЯЗЬ:</b> {u['tag']}\n"
+            f"📡 <b>ТЭГ:</b> {u['tag']}\n"
             f"📅 <b>ВЫДАНО:</b> {date_reg}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"<i>Слава Пакту!</i>\n"
             f"{FLAGS}"
         )
         await message.reply(text, parse_mode="HTML")
-    except: await message.reply("📡 Сбой доступа к архивам.")
+    except Exception as e:
+        logger.error(f"Ошибка паспорта: {e}")
+        await message.reply("📡 Сбой доступа к архивам.")
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
@@ -165,6 +176,51 @@ async def cmd_stats(message: types.Message):
         await message.reply(text, parse_mode="HTML")
     except: await message.reply("📊 Сводка недоступна.")
 
+# --- ПРЕЗИДЕНТСКИЕ ПОЛНОМОЧИЯ ---
+
+@dp.message(Command("set_rank"))
+async def cmd_set_rank(message: types.Message):
+    if str(message.from_user.id) != ADMIN_ID: return
+    if not message.reply_to_message: return await message.reply("👤 Ответь на сообщение.")
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2: return await message.reply("❌ Укажи ранг: /set_rank Офицер")
+    t_id = str(message.reply_to_message.from_user.id)
+    try:
+        supabase.table("citizens").update({"rank": args[1][:25]}).eq("id", t_id).execute()
+        await message.reply(f"🎖 Гражданину присвоен статус: <b>{args[1]}</b>", parse_mode="HTML")
+    except: pass
+
+@dp.message(Command("verify"))
+async def cmd_verify(message: types.Message):
+    # Только Президент Трамадол может верифицировать
+    if str(message.from_user.id) != ADMIN_ID:
+        return await message.reply("⚠️ Доступ запрещён. Требуется печать Президента.")
+    
+    if not message.reply_to_message:
+        return await message.reply("👤 Ответь на сообщение гражданина для верификации.")
+    
+    t_id = str(message.reply_to_message.from_user.id)
+    t_name = message.reply_to_message.from_user.first_name
+    
+    try:
+        # Пытаемся обновить колонку verification в базе
+        # (Она должна быть типа boolean в Supabase)
+        supabase.table("citizens").update({"verification": True}).eq("id", t_id).execute()
+        
+        text = (
+            f"🛡 <b>ВЕРИФИКАЦИЯ ПАКТА</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"Гражданин <b>{t_name}</b> прошёл личную проверку.\n"
+            f"Профиль подтверждён Президентом Пакта.\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{FLAGS}"
+        )
+        await message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Ошибка верификации: {e}")
+        # Если колонки нет в базе, бот упадет сюда.
+        await message.reply("📡 Сбой канцелярии. Проверь структуру базы в Supabase.")
+
 # --- ИИ И НОВОСТИ ---
 
 @dp.message(Command("news"))
@@ -188,8 +244,7 @@ async def main_handler(message: types.Message):
         name, rank = "Аноним", "Неизвестный"
         try:
             res = supabase.table("citizens").select("name, rank").eq("id", u_id).execute()
-            if res.data: 
-                name, rank = res.data[0]['name'], res.data[0]['rank']
+            if res.data: name, rank = res.data[0]['name'], res.data[0]['rank']
         except: pass
         
         ans = await ask_ai(f"{SYSTEM_CORE}\nПеред тобой {rank} {name}. Запрос: {message.text}")
@@ -198,7 +253,7 @@ async def main_handler(message: types.Message):
 # --- ЗАПУСК ---
 
 async def handle_root(request):
-    return web.Response(text="Idel System v6.0 Online")
+    return web.Response(text="Idel System v6.5 Online")
 
 async def main():
     app = web.Application()

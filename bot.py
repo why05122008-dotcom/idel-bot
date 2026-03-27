@@ -42,7 +42,7 @@ def get_p(uid):
 
 # ================= ВЕБ-СЕРВЕР ДЛЯ RENDER =================
 async def handle(request):
-    return web.Response(text="Idel Bot is Active")
+    return web.Response(text="Idel Bot v9.1 is Active")
 
 async def start_web_server():
     app = web.Application()
@@ -65,8 +65,7 @@ async def cmd_instruction(message: types.Message):
         r"• `/info [@юзер]` — досье" + "\n\n"
         r"⚔️ *ДИПЛОМАТИЯ*" + "\n"
         r"• `/war [@юзер]` — объявить войну" + "\n"
-        r"• `/peace [@юзер]` — заключить мир" + "\n"
-        r"• `/attack [Город] [Войска]` — осада" + "\n\n"
+        r"• `/peace [@юзер]` — заключить мир" + "\n\n"
         r"💰 *ЭКОНОМИКА*" + "\n"
         r"• `/pay [@юзер] [Сумма]` — перевод"
     )
@@ -90,17 +89,6 @@ async def cmd_create(message: types.Message):
     supabase.table("cities").insert({"owner_id": uid, "name": f"Столица {name}", "is_capital": True}).execute()
     await message.reply(f"🚩 Страна *{esc(name)}* создана\!", parse_mode=ParseMode.MARKDOWN_V2)
 
-@dp.message(Command("war"))
-async def cmd_war(message: types.Message):
-    args = message.text.split()[1:]
-    target_id = await get_target_id(message, args)
-    uid = str(message.from_user.id)
-    if not target_id or target_id == uid: 
-        return await message.reply(r"❌ Ошибка цели\.", parse_mode=ParseMode.MARKDOWN_V2)
-    
-    supabase.table("wars").insert({"player_a": uid, "player_b": target_id, "status": "active"}).execute()
-    await message.reply(r"⚔️ *ВОЙНА ОБЪЯВЛЕНА\!*", parse_mode=ParseMode.MARKDOWN_V2)
-
 @dp.message(Command("pay"))
 async def cmd_pay(message: types.Message):
     args = message.text.split()
@@ -110,7 +98,7 @@ async def cmd_pay(message: types.Message):
         uid = str(message.from_user.id)
         
         if tid == uid or amt <= 0:
-            return await message.reply(r"❌ Нельзя перевести самому себе\.", parse_mode=ParseMode.MARKDOWN_V2)
+            return await message.reply(r"❌ Некорректный перевод\.", parse_mode=ParseMode.MARKDOWN_V2)
         
         s = get_p(uid)
         if s['balance'] < amt:
@@ -118,30 +106,4 @@ async def cmd_pay(message: types.Message):
         
         supabase.table("players").update({"balance": s['balance'] - amt}).eq("user_id", uid).execute()
         target_p = get_p(tid)
-        supabase.table("players").update({"balance": target_p['balance'] + amt}).eq("user_id", tid).execute()
-        await message.reply(f"💰 Переведено {amt:,} золота\.")
-    except Exception:
-        await message.reply(r"❌ Ошибка перевода\.", parse_mode=ParseMode.MARKDOWN_V2)
-
-# ================= ЗАПУСК =================
-async def tax_job():
-    ps = supabase.table("players").select("user_id, balance").execute().data
-    if ps:
-        for p in ps:
-            cs = supabase.table("cities").select("id").eq("owner_id", p['user_id']).execute().data
-            if cs:
-                new_val = p['balance'] + (len(cs) * 5000)
-                supabase.table("players").update({"balance": new_val}).eq("user_id", p['user_id']).execute()
-
-async def main():
-    await start_web_server()
-    await bot.delete_webhook(drop_pending_updates=True)
-    
-    scheduler.add_job(tax_job, 'interval', hours=4)
-    scheduler.start()
-    
-    print("🚀 Идель v8.9 запущена без ошибок отступов!")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main()) 
+        supabase.table("players").update({"balance": target_p['balance'] + amt}).eq("user_id", tid).execute

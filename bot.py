@@ -1,6 +1,7 @@
 import os
 import asyncio
 import re
+import logging
 from datetime import datetime, timedelta, timezone
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -8,6 +9,9 @@ from aiogram.enums import ParseMode
 from supabase import create_client, Client
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiohttp import web
+
+# Включаем логирование, чтобы видеть ВСЕ ошибки в логах Render
+logging.basicConfig(level=logging.INFO)
 
 # ================= КОНФИГ =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -52,6 +56,7 @@ async def start_web_server():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
+    logging.info(f"Веб-сервер запущен на порту {port}")
 
 # ================= КОМАНДЫ =================
 
@@ -83,37 +88,51 @@ async def cmd_create(message: types.Message):
     
     name = args[1][:25]
     try:
+        # Учитываем, что у пользователя может не быть юзернейма, тогда берем имя
+        username = message.from_user.username or message.from_user.first_name
+
         supabase.table("players").insert({
-            "user_id": uid, "username": message.from_user.username, 
+            "user_id": uid, "username": username, 
             "state_name": name, "balance": 50000, "army": 1000
         }).execute()
         supabase.table("cities").insert({"owner_id": uid, "name": f"Столица {name}", "is_capital": True}).execute()
-        await message.reply(f"🚩 Страна *{esc(name)}* создана\!", parse_mode=ParseMode.MARKDOWN_V2)
+        
+        # Исправлено предупреждение SyntaxWarning (двойной слэш)
+        await message.reply(f"🚩 Страна *{esc(name)}* создана\\!", parse_mode=ParseMode.MARKDOWN_V2)
     except Exception as e:
-        print(f"Ошибка БД: {e}")
+        logging.error(f"Ошибка БД при создании: {e}")
         await message.reply(r"Ой, база данных чихнула\. Попробуй позже\.", parse_mode=ParseMode.MARKDOWN_V2)
 
 @dp.message(Command("pay"))
 async def cmd_pay(message: types.Message):
-    args = message.text.split()
+    # ОШИБКА БЫЛА ЗДЕСЬ: нужно пропустить само слово команды (например, /pay)
+    args = message.text.split()[1:]
     try:
-        if len(args) < 2: raise ValueError
+        if len(args) < 1: 
+            raise ValueError
+        
         amt = int(args[-1])
         tid = await get_target_id(message, args[:-1])
         uid = str(message.from_user.id)
         
-        if tid == uid or amt <= 0:
+        if not tid or tid == uid or amt <= 0:
             return await message.reply(r"❌ Некорректный перевод\.", parse_mode=ParseMode.MARKDOWN_V2)
         
         s = get_p(uid)
-        if s['balance'] < amt:
+        if not s or s['balance'] < amt:
             return await message.reply(r"Недостаточно золота\.", parse_mode=ParseMode.MARKDOWN_V2)
         
-        supabase.table("players").update({"balance": s['balance'] - amt}).eq("user_id", uid).execute()
         target_p = get_p(tid)
+        if not target_p:
+            return await message.reply(r"❌ Получатель не найден\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+        supabase.table("players").update({"balance": s['balance'] - amt}).eq("user_id", uid).execute()
         supabase.table("players").update({"balance": target_p['balance'] + amt}).eq("user_id", tid).execute()
-        await message.reply(f"💰 Переведено {amt:,} золота\.")
-    except Exception:
+        
+        # Убрали слэш перед точкой, так как здесь нет MARKDOWN_V2
+        await message.reply(f"💰 Переведено {amt:,} золота.")
+    except Exception as e:
+        logging.error(f"Ошибка перевода: {e}")
         await message.reply(r"❌ Ошибка перевода\. Проверь сумму и юзера\.", parse_mode=ParseMode.MARKDOWN_V2)
 
 # ================= ЗАПУСК =================
@@ -127,7 +146,7 @@ async def tax_job():
                     new_val = p['balance'] + (len(cs) * 5000)
                     supabase.table("players").update({"balance": new_val}).eq("user_id", p['user_id']).execute()
     except Exception as e:
-        print(f"Tax Error: {e}")
+        logging.error(f"Tax Error: {e}")
 
 async def main():
     await start_web_server()
@@ -136,7 +155,7 @@ async def main():
     scheduler.add_job(tax_job, 'interval', hours=4)
     scheduler.start()
     
-    print("🚀 Идель v9.2: Полный боезапас!")
+    logging.info("🚀 Идель v9.2: Полный боезапас!")
     try:
         await dp.start_polling(bot)
     finally:

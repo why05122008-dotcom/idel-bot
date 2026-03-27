@@ -4,3 +4,5 @@ aiohttp
 duckduckgo_search
 edge-tts
 supabase
+apscheduler
+python-dotenv

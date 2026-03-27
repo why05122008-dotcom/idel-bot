@@ -42,7 +42,7 @@ def get_p(uid):
 
 # ================= ВЕБ-СЕРВЕР ДЛЯ RENDER =================
 async def handle(request):
-    return web.Response(text="Idel Bot v9.1 is Active")
+    return web.Response(text="Idel Bot v9.2 is Online")
 
 async def start_web_server():
     app = web.Application()
@@ -82,17 +82,22 @@ async def cmd_create(message: types.Message):
         return await message.reply(r"У вас уже есть государство\!", parse_mode=ParseMode.MARKDOWN_V2)
     
     name = args[1][:25]
-    supabase.table("players").insert({
-        "user_id": uid, "username": message.from_user.username, 
-        "state_name": name, "balance": 50000, "army": 1000
-    }).execute()
-    supabase.table("cities").insert({"owner_id": uid, "name": f"Столица {name}", "is_capital": True}).execute()
-    await message.reply(f"🚩 Страна *{esc(name)}* создана\!", parse_mode=ParseMode.MARKDOWN_V2)
+    try:
+        supabase.table("players").insert({
+            "user_id": uid, "username": message.from_user.username, 
+            "state_name": name, "balance": 50000, "army": 1000
+        }).execute()
+        supabase.table("cities").insert({"owner_id": uid, "name": f"Столица {name}", "is_capital": True}).execute()
+        await message.reply(f"🚩 Страна *{esc(name)}* создана\!", parse_mode=ParseMode.MARKDOWN_V2)
+    except Exception as e:
+        print(f"Ошибка БД: {e}")
+        await message.reply(r"Ой, база данных чихнула\. Попробуй позже\.", parse_mode=ParseMode.MARKDOWN_V2)
 
 @dp.message(Command("pay"))
 async def cmd_pay(message: types.Message):
     args = message.text.split()
     try:
+        if len(args) < 2: raise ValueError
         amt = int(args[-1])
         tid = await get_target_id(message, args[:-1])
         uid = str(message.from_user.id)
@@ -106,4 +111,36 @@ async def cmd_pay(message: types.Message):
         
         supabase.table("players").update({"balance": s['balance'] - amt}).eq("user_id", uid).execute()
         target_p = get_p(tid)
-        supabase.table("players").update({"balance": target_p['balance'] + amt}).eq("user_id", tid).execute
+        supabase.table("players").update({"balance": target_p['balance'] + amt}).eq("user_id", tid).execute()
+        await message.reply(f"💰 Переведено {amt:,} золота\.")
+    except Exception:
+        await message.reply(r"❌ Ошибка перевода\. Проверь сумму и юзера\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+# ================= ЗАПУСК =================
+async def tax_job():
+    try:
+        ps = supabase.table("players").select("user_id, balance").execute().data
+        if ps:
+            for p in ps:
+                cs = supabase.table("cities").select("id").eq("owner_id", p['user_id']).execute().data
+                if cs:
+                    new_val = p['balance'] + (len(cs) * 5000)
+                    supabase.table("players").update({"balance": new_val}).eq("user_id", p['user_id']).execute()
+    except Exception as e:
+        print(f"Tax Error: {e}")
+
+async def main():
+    await start_web_server()
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    scheduler.add_job(tax_job, 'interval', hours=4)
+    scheduler.start()
+    
+    print("🚀 Идель v9.2: Полный боезапас!")
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())

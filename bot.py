@@ -8,6 +8,7 @@ from aiogram.filters import Command
 from aiogram.enums import ParseMode
 from supabase import create_client, Client
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiohttp import web
 
 # ================= КОНФИГ =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -21,173 +22,150 @@ scheduler = AsyncIOScheduler()
 
 MSK_TZ = timezone(timedelta(hours=3))
 
-# ================= ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =================
-def clean_md(text):
-    """Очистка текста от символов, ломающих Markdown"""
+# ================= ТЕХНИЧЕСКИЕ ФУНКЦИИ (ЗАЩИТА) =================
+def esc(text):
+    """Экранирует спецсимволы для MarkdownV2, чтобы бот не падал"""
+    if not text: return ""
     return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', str(text))
 
 async def get_target_id(message: types.Message, args: list):
-    """Определяет ID цели по реплаю, юзернейму или ID"""
+    """Определяет ID цели: Реплай > Username > ID"""
     if message.reply_to_message:
         return str(message.reply_to_message.from_user.id)
     if args:
         target = args[0].replace("@", "")
         if target.isdigit(): return target
-        # Поиск в базе по username
         res = supabase.table("players").select("user_id").eq("username", target).execute()
         if res.data: return res.data[0]['user_id']
     return None
-
-def is_night():
-    return 0 <= datetime.now(MSK_TZ).hour < 8
 
 def get_p(uid):
     res = supabase.table("players").select("*").eq("user_id", str(uid)).execute()
     return res.data[0] if res.data else None
 
-# ================= КОМАНДЫ УПРАВЛЕНИЯ =================
+def is_night():
+    return 0 <= datetime.now(MSK_TZ).hour < 8
+
+# ================= ВЕБ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ НЕ ПАДАЛ ПОРТ) =================
+async def handle(request):
+    return web.Response(text="Идель: Пакт Активен")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+# ================= КОМАНДЫ ДИПЛОМАТИИ И СТРАНЫ =================
 
 @dp.message(Command("instruction"))
 async def cmd_instruction(message: types.Message):
     text = (
-        "📖 **ИНСТРУКЦИЯ**\n\n"
-        "🚩 **ОСНОВЫ:**\n"
-        "• `/create [Название]` — создать страну.\n"
-        "• `/capital [Имя]` — сменить название столицы (10к).\n"
-        "• `/info [@юзер/ID]` — разведка данных.\n\n"
-        "⚔️ **ВОЙНА:**\n"
-        "• `/war [@юзер/ID]` — объявить войну (нужно перед атакой).\n"
-        "• `/attack [Город] [Войска]` — начать осаду (60 мин).\n"
-        "• `/protect [Город] [Войска]` — усилить гарнизон.\n\n"
-        "💰 **ЭКОНОМИКА:**\n"
-        "• `/army` — призыв (раз в 8ч).\n"
-        "• `/pay [@юзер] [Сумма]` — перевод золота.\n"
-        "• `/upgrade [Город]` — уровень стен (до Lvl 3).\n\n"
-        "⚠️ *Атаки запрещены с 00:00 до 08:00 МСК.*"
+        "📖 *ИНСТРУКЦИЯ ПАКТА*\n\n"
+        "🚩 *ГОСУДАРСТВО*\n"
+        "• `/create [Имя]` — создать страну\n"
+        "• `/capital [Имя]` — сменить имя столицы \(10к\)\n"
+        "• `/info [@юзер]` — разведка данных\n"
+        "• `/states` — мировой рейтинг\n\n"
+        "⚔️ *ВОЙНА И МИР*\n"
+        "• `/war [@юзер]` — объявить войну\n"
+        "• `/peace [@юзер]` — предложить мир\n"
+        "• `/attack [Город] [Войска]` — начать осаду\n"
+        "• `/protect [Город] [Войска]` — защита города\n\n"
+        "💰 *ЭКОНОМИКА*\n"
+        "• `/army` — призыв \(раз в 8ч\)\n"
+        "• `/pay [@юзер] [Сумма]` — перевод золота\n"
+        "• `/upgrade [Город]` — уровень стен\n"
     )
-    await message.reply(text, parse_mode="MarkdownV2")
+    await message.reply(text, parse_mode=ParseMode.MARKDOWN_V2)
+
+@dp.message(Command("war"))
+async def cmd_war(message: types.Message):
+    if is_night(): return await message.reply("🌙 Ночное перемирие до 08:00 МСК\.")
+    args = message.text.split()[1:]
+    target_id = await get_target_id(message, args)
+    uid = str(message.from_user.id)
+    
+    if not target_id or target_id == uid:
+        return await message.reply("❌ Нельзя объявить войну самому себе или призраку\.")
+
+    exists = supabase.table("wars").select("*").eq("player_a", uid).eq("player_b", target_id).eq("status", "active").execute()
+    if exists.data: return await message.reply("⚔️ Вы уже воюете\!")
+
+    supabase.table("wars").insert({"player_a": uid, "player_b": target_id, "status": "active"}).execute()
+    await message.reply(f"⚔️ *СОСТОЯНИЕ ВОЙНЫ ОБЪЯВЛЕНО\!*\nИспользуйте `/attack` для нападения\.", parse_mode=ParseMode.MARKDOWN_V2)
+
+@dp.message(Command("peace"))
+async def cmd_peace(message: types.Message):
+    args = message.text.split()[1:]
+    target_id = await get_target_id(message, args)
+    uid = str(message.from_user.id)
+
+    if not target_id or target_id == uid:
+        return await message.reply("❌ Вы не воюете с самим собой\.")
+
+    supabase.table("wars").update({"status": "closed"}).or_(f"and(player_a.eq.{uid},player_b.eq.{target_id}),and(player_a.eq.{target_id},player_b.eq.{uid})").execute()
+    await message.reply("🤝 *Мир подписан\!* Осады прекращены\.", parse_mode=ParseMode.MARKDOWN_V2)
 
 @dp.message(Command("create"))
 async def cmd_create(message: types.Message):
     args = message.text.split(maxsplit=1)
-    if len(args) < 2: return await message.reply("Введите название страны!")
+    if len(args) < 2: return await message.reply("Введите название\!")
     uid = str(message.from_user.id)
-    if get_p(uid): return await message.reply("У вас уже есть государство!")
+    if get_p(uid): return await message.reply("У вас уже есть страна\!")
     
-    name = args[1][:30]
+    name = args[1][:25]
     supabase.table("players").insert({"user_id": uid, "username": message.from_user.username, "state_name": name}).execute()
     supabase.table("cities").insert({"owner_id": uid, "name": f"Столица {name}", "is_capital": True}).execute()
-    await message.reply(f"🚩 Страна **{clean_md(name)}** признана мировым сообществом!", parse_mode="MarkdownV2")
+    await message.reply(f"🚩 Страна *{esc(name)}* создана\!", parse_mode=ParseMode.MARKDOWN_V2)
 
-@dp.message(Command("capital"))
-async def cmd_capital(message: types.Message):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2: return await message.reply("/capital [Новое название]")
-    uid = str(message.from_user.id)
-    p = get_p(uid)
-    if p['balance'] < 10000: return await message.reply("Смена названия столицы стоит 10,000 золота!")
-    
-    new_name = args[1][:30]
-    supabase.table("players").update({"balance": p['balance'] - 10000}).eq("user_id", uid).execute()
-    supabase.table("cities").update({"name": new_name}).eq("owner_id", uid).eq("is_capital", True).execute()
-    await message.reply(f"🏙 Столица переименована в **{clean_md(new_name)}**!", parse_mode="MarkdownV2")
-
-@dp.message(Command("war"))
-async def cmd_war(message: types.Message):
-    if is_night(): return await message.reply("🌙 Ночное перемирие.")
+@dp.message(Command("info"))
+async def cmd_info(message: types.Message):
     args = message.text.split()[1:]
-    target_id = await get_target_id(message, args)
+    target_id = await get_target_id(message, args) or str(message.from_user.id)
+    p = get_p(target_id)
+    if not p: return await message.reply("Страна не найдена\.")
     
-    if not target_id or target_id == str(message.from_user.id):
-        return await message.reply("Укажите врага (реплаем, @username или ID).")
+    cts = supabase.table("cities").select("*").eq("owner_id", target_id).execute().data
+    city_list = "\n".join([f"├ 🏙 {esc(c['name'])} \[Lvl {c['level']}\] \(Гарнизон: {c['garrison']:,}\)" for c in cts])
     
-    res = supabase.table("wars").select("*").eq("player_a", str(message.from_user.id)).eq("player_b", target_id).eq("status", "active").execute()
-    if res.data: return await message.reply("Вы уже воюете!")
-    
-    supabase.table("wars").insert({"player_a": str(message.from_user.id), "player_b": target_id}).execute()
-    await message.reply("⚔️ **СОСТОЯНИЕ ВОЙНЫ ОБЪЯВЛЕНО!**", parse_mode="MarkdownV2")
-
-@dp.message(Command("attack"))
-async def cmd_attack(message: types.Message):
-    if is_night(): return await message.reply("🌙 Ночь.")
-    args = message.text.split()
-    if len(args) < 3: return await message.reply("/attack [Город] [Число]")
-    
-    cname, forces = args[1], int(args[2])
-    uid = str(message.from_user.id)
-    p = get_p(uid)
-    
-    city = supabase.table("cities").select("*").eq("name", cname).execute().data
-    if not city: return await message.reply("Город не найден.")
-    
-    # Проверка войны (в обе стороны)
-    war = supabase.table("wars").select("*").or_(f"and(player_a.eq.{uid},player_b.eq.{city[0]['owner_id']}),and(player_a.eq.{city[0]['owner_id']},player_b.eq.{uid})").eq("status", "active").execute()
-    
-    if not war.data: return await message.reply("Сначала объявите войну через /war!")
-    if p['army'] < forces or forces < 500: return await message.reply("Недостаточно войск.")
-
-    supabase.table("players").update({"army": p['army'] - forces}).eq("user_id", uid).execute()
-    end_t = datetime.now(timezone.utc) + timedelta(minutes=60)
-    
-    sent_msg = await message.reply(f"🚨 **ОСАДА {clean_md(cname.upper())}!**\n🕒 Конец через 60 минут.", parse_mode="MarkdownV2")
-    
-    supabase.table("battles").insert({
-        "city_id": city[0]['id'], "attacker_id": uid, 
-        "attacker_forces": forces, "end_time": end_t.isoformat(), 
-        "chat_id": str(message.chat.id), "message_id": str(sent_msg.message_id)
-    }).execute()
+    res = (
+        f"📑 *{esc(p['state_name'])}* \(@{esc(p['username'])}\)\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"💰 Казна: {p['balance']:,}\n"
+        f"🪖 Резерв: {p['army']:,}\n"
+        f"🏙 Города:\n{city_list}"
+    )
+    await message.reply(res, parse_mode=ParseMode.MARKDOWN_V2)
 
 @dp.message(Command("pay"))
 async def cmd_pay(message: types.Message):
     args = message.text.split()
-    if len(args) < 2: return await message.reply("/pay [@юзер/ID] [Сумма]")
+    if len(args) < 2: return await message.reply("Использование: /pay @юзер [сумма]")
     
-    amt = int(args[-1])
-    target_id = await get_target_id(message, args[:-1])
+    try:
+        amt = int(args[-1])
+        target_id = await get_target_id(message, args[:-1])
+    except: return await message.reply("Ошибка ввода\.")
+
+    uid = str(message.from_user.id)
+    if not target_id or target_id == uid or amt <= 0: return await message.reply("❌ Некорректный перевод\.")
     
-    if amt <= 0 or not target_id: return await message.reply("Ошибка параметров.")
+    sender = get_p(uid)
+    if sender['balance'] < amt: return await message.reply("Недостаточно золота\.")
     
-    sender = get_p(message.from_user.id)
-    if sender['balance'] < amt: return await message.reply("Недостаточно золота.")
-    
-    supabase.table("players").update({"balance": sender['balance'] - amt}).eq("user_id", str(message.from_user.id)).execute()
+    supabase.table("players").update({"balance": sender['balance'] - amt}).eq("user_id", uid).execute()
     supabase.table("players").update({"balance": get_p(target_id)['balance'] + amt}).eq("user_id", target_id).execute()
-    await message.reply(f"💰 Переведено {amt:,} золота.")
+    await message.reply(f"💰 Успешно переведено {amt:,} золота\.")
 
 # ================= ШЕДУЛЕР (НАЛОГИ И БИТВЫ) =================
 
 async def tax_job():
     players = supabase.table("players").select("user_id, balance").execute().data
     for p in players:
-        count = len(supabase.table("cities").select("id").eq("owner_id", p['user_id']).execute().data)
-        if count > 0:
-            supabase.table("players").update({"balance": p['balance'] + (count * 5000)}).eq("user_id", p['user_id']).execute()
-
-async def battle_job():
-    now = datetime.now(timezone.utc)
-    battles = supabase.table("battles").select("*").execute().data
-    for b in battles:
-        if now >= datetime.fromisoformat(b['end_time']).replace(tzinfo=timezone.utc):
-            city = supabase.table("cities").select("*").eq("id", b['city_id']).execute().data[0]
-            mult = {1: 1.5, 2: 2.0, 3: 3.0}.get(city['level'], 1.5)
-            defense = (city['garrison'] + b['support_forces']) * mult
-            
-            if b['attacker_forces'] > defense:
-                supabase.table("cities").update({"owner_id": b['attacker_id'], "garrison": int(b['attacker_forces']*0.4), "level": 1}).eq("id", city['id']).execute()
-                res_text = f"🚩 **{clean_md(city['name'])} захвачен!**"
-            else:
-                supabase.table("cities").update({"garrison": int(city['garrison']*0.6)}).eq("id", city['id']).execute()
-                res_text = f"🛡 **{clean_md(city['name'])} выстоял!**"
-            
-            await bot.send_message(b['chat_id'], res_text, parse_mode="MarkdownV2")
-            supabase.table("battles").delete().eq("id", b['id']).execute()
-
-# ================= ЗАПУСК =================
-async def main():
-    scheduler.add_job(battle_job, 'interval', minutes=1)
-    scheduler.add_job(tax_job, 'interval', hours=4)
-    scheduler.start()
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main()) 
+        cities = supabase.table("cities").select("id").eq("owner_id", p['user_id']).execute().data
+        if cities:
+            supabase.table("players").update({"balance": p['balance'] + (len(cities
